@@ -1,0 +1,11 @@
+.DS_Store
+build/
+DerivedData/
+*.xcodeproj
+!default.xcodeproj
+xcuserdata/
+*.xcuserstate
+.swiftpm/
+Generated-Info.plist
+*.dmg
+dmg-staging/

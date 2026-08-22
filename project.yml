@@ -1,0 +1,52 @@
+name: MacMemClean
+options:
+  bundleIdPrefix: com.sanelhadzini
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: 5.7
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    ENABLE_HARDENED_RUNTIME: YES
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+targets:
+  MacMemClean:
+    type: application
+    platform: macOS
+    sources:
+      - path: MacMemClean
+        excludes:
+          - "**/*.entitlements"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sanelhadzini.macmemclean
+        PRODUCT_NAME: MacMemClean
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_PREVIEWS: YES
+    info:
+      path: Generated-Info.plist
+      properties:
+        LSMinimumSystemVersion: "13.0"
+        NSMainStoryboardFile: ""
+        NSPrincipalClass: NSApplication
+        LSUIElement: false
+    entitlements:
+      path: MacMemClean/Resources/MacMemClean.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+        com.apple.security.network.client: true
+        com.apple.security.files.user-selected.read-write: true
+schemes:
+  MacMemClean:
+    build:
+      targets:
+        MacMemClean: all
+    run:
+      config: Debug
+    archive:
+      config: Release
