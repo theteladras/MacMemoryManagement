@@ -11,6 +11,7 @@ private extension SidebarSection {
         case .duplicates: return .yellow
         case .compression: return .teal
         case .uninstaller: return .purple
+        case .multiUser: return .red
         case .history: return .green
         case .permissions: return .orange
         case .settings: return .gray
@@ -33,8 +34,40 @@ struct SidebarView: View {
     @EnvironmentObject private var appState: AppState
     @AppStorage("sidebar.isExpanded") private var isExpanded: Bool = true
 
-    private let mainSections: [SidebarSection] = [.overview, .explorer, .junk, .largeOld, .duplicates, .compression, .uninstaller, .history]
+    // Observed purely so this view redraws when a background scan/action starts or finishes on a
+    // section you've since navigated away from — each of these is a `.shared` singleton (survives
+    // navigation for exactly this reason), so a spinner can show here in real time.
+    @ObservedObject private var overviewVM = OverviewViewModel.shared
+    @ObservedObject private var explorerVM = StorageTreeViewModel.shared
+    @ObservedObject private var junkVM = JunkScanViewModel.shared
+    @ObservedObject private var largeOldVM = LargeOldFilesViewModel.shared
+    @ObservedObject private var duplicatesVM = DuplicatesViewModel.shared
+    @ObservedObject private var compressionVM = CompressionViewModel.shared
+    @ObservedObject private var uninstallerVM = UninstallerViewModel.shared
+    @ObservedObject private var multiUserVM = MultiUserViewModel.shared
+
+    private let mainSections: [SidebarSection] = [.overview, .explorer, .junk, .largeOld, .duplicates, .compression, .uninstaller, .multiUser, .history]
     private let footerSections: [SidebarSection] = [.permissions, .settings]
+
+    private func isBusy(_ section: SidebarSection) -> Bool {
+        switch section {
+        case .overview: return overviewVM.isLoadingSummary || overviewVM.isSmartScanning || overviewVM.isAnalyzingTypes
+        case .explorer:
+            // Deliberately not `explorerVM.root.isLoadingChildren` — that `@Published` lives on
+            // the nested `TreeNode`, not on `StorageTreeViewModel` itself, so observing only the
+            // view model here wouldn't actually trigger a redraw when it changes (same pitfall
+            // `StorageTreeView` had to work around). These two cover root-level loads, which are
+            // the cases that matter once you've navigated away from this section.
+            return explorerVM.isLoadingRoot || explorerVM.isRefreshingRoot
+        case .junk: return junkVM.isScanning
+        case .largeOld: return largeOldVM.isScanning
+        case .duplicates: return duplicatesVM.isScanning
+        case .compression: return compressionVM.isScanning || compressionVM.isCompressing
+        case .uninstaller: return uninstallerVM.isLoading || uninstallerVM.isLoadingPlan
+        case .multiUser: return multiUserVM.isLoadingSizes || multiUserVM.isScanning
+        case .history, .permissions, .settings: return false
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -101,6 +134,7 @@ struct SidebarView: View {
     private func sidebarRow(_ section: SidebarSection) -> some View {
         let isSelected = appState.selectedSection == section
         let needsAttention = section == .permissions && !appState.permissions.hasFullDiskAccess
+        let busy = isBusy(section)
 
         return Button {
             withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
@@ -108,7 +142,7 @@ struct SidebarView: View {
             }
         } label: {
             HStack(spacing: 10) {
-                rowIcon(section, isSelected: isSelected, needsAttention: needsAttention)
+                rowIcon(section, isSelected: isSelected, needsAttention: needsAttention, isBusy: busy)
                 if isExpanded {
                     Text(section.rawValue)
                         .font(.system(.body, design: .rounded).weight(isSelected ? .bold : .medium))
@@ -130,16 +164,25 @@ struct SidebarView: View {
         .help(section.rawValue)
     }
 
-    private func rowIcon(_ section: SidebarSection, isSelected: Bool, needsAttention: Bool) -> some View {
-        Image(systemName: section.symbolName)
-            .font(.system(size: 14, weight: .bold))
-            .foregroundStyle(isSelected ? .white : Color(nsColor: .labelColor))
-            .frame(width: 20)
-            .overlay(alignment: .topTrailing) {
-                if needsAttention {
-                    Circle().fill(Color.orange).frame(width: 6, height: 6).offset(x: 4, y: -2)
-                }
+    private func rowIcon(_ section: SidebarSection, isSelected: Bool, needsAttention: Bool, isBusy: Bool) -> some View {
+        Group {
+            if isBusy {
+                Spinner(color: isSelected ? .white : .secondary, lineWidth: 2)
+                    .frame(width: 14, height: 14)
+            } else {
+                Image(systemName: section.symbolName)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(isSelected ? .white : Color(nsColor: .labelColor))
             }
+        }
+        .frame(width: 20)
+        .overlay(alignment: .topTrailing) {
+            if needsAttention {
+                Circle().fill(Color.orange).frame(width: 6, height: 6).offset(x: 4, y: -2)
+            }
+        }
+        .help(isBusy ? "\(section.rawValue) — working…" : section.rawValue)
+        .animation(.easeInOut(duration: 0.2), value: isBusy)
     }
 
     private var fdaNudge: some View {

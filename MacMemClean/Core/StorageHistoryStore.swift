@@ -49,8 +49,8 @@ final class StorageHistoryStore: ObservableObject {
     @Published private(set) var snapshots: [StorageSnapshot] = []
 
     private let fileURL: URL
-    private let retentionDays = 90
     private let minIntervalBetweenSnapshots: TimeInterval = 60 * 60 // don't spam on repeated refreshes
+    private var retentionDays: Int { AppSettings.shared.historyRetentionDays }
 
     private init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -59,6 +59,25 @@ final class StorageHistoryStore: ObservableObject {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         fileURL = dir.appendingPathComponent("storage_history.json")
         snapshots = Self.load(from: fileURL)
+        let before = snapshots.count
+        trimToRetention()
+        if snapshots.count != before { persist() }
+    }
+
+    /// Applies the current retention window — called at launch and from `record()`, so lowering
+    /// the setting in Settings takes effect right away rather than waiting for the next snapshot.
+    /// Just mutates `snapshots`; callers decide whether/when to persist.
+    func trimToRetention() {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -retentionDays, to: Date()) ?? .distantPast
+        snapshots.removeAll { $0.date < cutoff }
+    }
+
+    /// For Settings to call right when the retention slider moves — otherwise a lowered value
+    /// would silently do nothing until the next snapshot happens to be recorded.
+    func applyRetentionNow() {
+        let before = snapshots.count
+        trimToRetention()
+        if snapshots.count != before { persist() }
     }
 
     func record(summary: DiskUsageSummary) {
@@ -66,19 +85,23 @@ final class StorageHistoryStore: ObservableObject {
         if let last = snapshots.last, Date().timeIntervalSince(last.date) < minIntervalBetweenSnapshots {
             return
         }
+        // Include "Other" as its own line, same as the capacity bar on Overview — without it the
+        // trend chart's "Total Used" line sits far above every category line with no visual
+        // explanation, since the tracked categories rarely account for most of a disk.
+        var breakdown = summary.breakdown.map { CategorySnapshot(name: $0.name, bytes: $0.bytes) }
+        if summary.otherBytes > 0 {
+            breakdown.append(CategorySnapshot(name: "Other", bytes: summary.otherBytes))
+        }
         let snapshot = StorageSnapshot(
             id: UUID(),
             date: Date(),
             usedBytes: summary.usedBytes,
             freeBytes: summary.freeBytes,
             totalBytes: summary.totalBytes,
-            breakdown: summary.breakdown.map { CategorySnapshot(name: $0.name, bytes: $0.bytes) }
+            breakdown: breakdown
         )
         snapshots.append(snapshot)
-
-        let cutoff = Calendar.current.date(byAdding: .day, value: -retentionDays, to: Date()) ?? .distantPast
-        snapshots.removeAll { $0.date < cutoff }
-
+        trimToRetention()
         persist()
     }
 

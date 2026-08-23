@@ -3,7 +3,7 @@ import SwiftUI
 /// Classifies files by what they actually are, independent of which folder they happen to sit
 /// in — a `.heic` in Downloads counts as a Photo just as much as one in Pictures. Used by the
 /// Overview "By File Type" breakdown so media isn't hidden inside a generic "Downloads" bucket.
-enum FileTypeCategory: String, CaseIterable, Identifiable {
+enum FileTypeCategory: String, CaseIterable, Identifiable, Codable {
     case images = "Images"
     case videos = "Videos"
     case audio = "Audio"

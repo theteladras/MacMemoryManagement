@@ -4,7 +4,7 @@ import Foundation
 /// keep personal content in (Documents, Desktop, Downloads, Pictures, Movies, Music, Public) so
 /// a photo doesn't get hidden just because it happens to live in Downloads rather than Pictures.
 enum FileTypeAnalyzer {
-    struct TypeUsage: Identifiable {
+    struct TypeUsage: Identifiable, Codable {
         let category: FileTypeCategory
         let bytes: Int64
         let count: Int

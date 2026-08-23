@@ -16,28 +16,35 @@ struct RootView: View {
         // `NavigationSplitView` column) also means there's nothing to drag-resize in the first
         // place. `NavigationStack` wraps only the detail side so each screen's `.navigationTitle`
         // still renders in the window's title bar as before.
-        HStack(spacing: 0) {
-            SidebarView()
-                .frame(width: isSidebarExpanded ? expandedWidth : collapsedWidth)
+        ZStack {
+            // Behind everything, all the time — the sidebar and detail area both sit on a
+            // translucent material (`.regularMaterial` / `.ultraThinMaterial`) specifically so
+            // this shows through as a soft, drifting tint instead of a flat window background.
+            AnimatedGradientBackground()
 
-            Divider()
+            HStack(spacing: 0) {
+                SidebarView()
+                    .frame(width: isSidebarExpanded ? expandedWidth : collapsedWidth)
 
-            NavigationStack {
-                detailView
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(nsColor: .underPageBackgroundColor))
-                    .toolbar {
-                        ToolbarItem(placement: .navigation) {
-                            Button {
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                    isSidebarExpanded.toggle()
+                Divider()
+
+                NavigationStack {
+                    detailView
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(.regularMaterial)
+                        .toolbar {
+                            ToolbarItem(placement: .navigation) {
+                                Button {
+                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                        isSidebarExpanded.toggle()
+                                    }
+                                } label: {
+                                    Image(systemName: isSidebarExpanded ? "sidebar.left" : "sidebar.right")
                                 }
-                            } label: {
-                                Image(systemName: isSidebarExpanded ? "sidebar.left" : "sidebar.right")
+                                .help(isSidebarExpanded ? "Collapse Sidebar" : "Expand Sidebar")
                             }
-                            .help(isSidebarExpanded ? "Collapse Sidebar" : "Expand Sidebar")
                         }
-                    }
+                }
             }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: isSidebarExpanded)
@@ -64,6 +71,8 @@ struct RootView: View {
                 CompressFilesView()
             case .uninstaller:
                 UninstallerView()
+            case .multiUser:
+                MultiUserView()
             case .history:
                 DeletionHistoryView()
             case .permissions:

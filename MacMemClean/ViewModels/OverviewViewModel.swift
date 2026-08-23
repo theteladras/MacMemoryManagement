@@ -8,7 +8,19 @@ import Foundation
 @MainActor
 final class OverviewViewModel: ObservableObject {
     static let shared = OverviewViewModel()
-    private init() {}
+    private init() {
+        // Seed from the last run's results so Overview shows real numbers the instant the app
+        // launches instead of a blank/zeroed hero card — `loadSummary()` still runs fresh right
+        // after (see `OverviewView`'s `.task`), and because `lastUpdated` stays nil here, that
+        // call is never throttled just because a cache happened to load.
+        if let cached = ScanCache.load(CachedDiskUsageSummary.self, key: "overview_summary") {
+            summary = DiskUsageSummary(cached: cached)
+        }
+        if let cachedTypes = ScanCache.load([FileTypeAnalyzer.TypeUsage].self, key: "overview_types") {
+            typeBreakdown = cachedTypes
+            hasAnalyzedTypes = true
+        }
+    }
 
     @Published var summary = DiskUsageSummary()
     @Published var isLoadingSummary = false
@@ -44,6 +56,7 @@ final class OverviewViewModel: ObservableObject {
         defer { isLoadingSummary = false }
         summary = await Task.detached { DiskUsageAnalyzer.summary() }.value
         lastUpdated = Date()
+        ScanCache.save(summary.cached, key: "overview_summary")
         StorageHistoryStore.shared.record(summary: summary)
     }
 
@@ -59,7 +72,8 @@ final class OverviewViewModel: ObservableObject {
         drillDownCategory = categoryName
         isLoadingDrillDown = true
         defer { isLoadingDrillDown = false }
-        drillDownSegments = await Task.detached { DiskUsageAnalyzer.drillDown(for: categoryName) ?? [] }.value
+        let otherBytes = summary.otherBytes
+        drillDownSegments = await Task.detached { DiskUsageAnalyzer.drillDown(for: categoryName, otherTotalBytes: otherBytes) ?? [] }.value
     }
 
     /// Scans Documents/Desktop/Downloads/Pictures/Movies/Music/Public and buckets every file by
@@ -70,6 +84,7 @@ final class OverviewViewModel: ObservableObject {
         defer { isAnalyzingTypes = false; hasAnalyzedTypes = true }
 
         typeBreakdown = await Task.detached { FileTypeAnalyzer.analyze() }.value
+        ScanCache.save(typeBreakdown, key: "overview_types")
     }
 
     /// Runs the junk scan + a quick large-file pass together, producing one combined result set
@@ -92,5 +107,10 @@ final class OverviewViewModel: ObservableObject {
 
         smartScanStatus = "Done"
         smartScanItems = junk + large
+    }
+
+    func removeFromSmartScanResults(_ items: [ScanItem]) {
+        let ids = Set(items.map(\.id))
+        smartScanItems.removeAll { ids.contains($0.id) }
     }
 }

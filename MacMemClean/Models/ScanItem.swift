@@ -3,7 +3,7 @@ import Foundation
 /// A single filesystem entry discovered by a scanner. Scanners only ever
 /// produce these — nothing is deleted until the user reviews and confirms
 /// a `ReviewManifest` built from a selection of `ScanItem`s.
-struct ScanItem: Identifiable, Hashable {
+struct ScanItem: Identifiable, Hashable, Codable {
     let id: String
     let path: URL
     let displayName: String

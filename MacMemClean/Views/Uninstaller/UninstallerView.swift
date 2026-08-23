@@ -3,7 +3,7 @@ import SwiftUI
 
 struct UninstallerView: View {
     @EnvironmentObject private var appState: AppState
-    @StateObject private var viewModel = UninstallerViewModel()
+    @ObservedObject private var viewModel = UninstallerViewModel.shared
 
     var body: some View {
         HSplitView {
@@ -27,38 +27,66 @@ struct UninstallerView: View {
 
     private var appListColumn: some View {
         Group {
-            if viewModel.isLoading {
+            // Cached/previous results take priority over the loading spinner — see
+            // `JunkScanView` for the same pattern and why.
+            if viewModel.isLoading && viewModel.apps.isEmpty {
                 ProgressView("Loading applications…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(viewModel.apps, selection: Binding(
-                    get: { viewModel.selectedApp?.id },
-                    set: { id in
-                        if let app = viewModel.apps.first(where: { $0.id == id }) {
-                            Task { await viewModel.selectApp(app) }
-                        }
-                    }
-                )) { app in
-                    HStack(spacing: 10) {
-                        if let icon = app.icon {
-                            Image(nsImage: icon).resizable().frame(width: 30, height: 30)
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(app.name).font(.system(.body, design: .rounded)).lineLimit(1)
-                            Text(app.lastUsedLabel)
-                                .font(.caption2)
-                                .foregroundStyle(app.isStale ? .orange : .secondary)
+                VStack(spacing: 0) {
+                    HStack(spacing: 4) {
+                        if viewModel.isLoading {
+                            ProgressView().controlSize(.small)
+                            Text("Refreshing…").font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Text(app.sizeBytes.formattedBytes)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        Button {
+                            Task { await viewModel.loadApps() }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(viewModel.isLoading)
+                        .help("Refresh app list")
                     }
-                    .padding(.vertical, 3)
-                    .tag(app.id)
+                    .padding(.horizontal)
+                    .padding(.top, 6)
+
+                    if let change = viewModel.lastChange {
+                        ScanChangeBanner(change: change) { viewModel.lastChange = nil }
+                            .padding(.horizontal)
+                            .padding(.top, 6)
+                    }
+
+                    List(viewModel.apps, selection: Binding(
+                        get: { viewModel.selectedApp?.id },
+                        set: { id in
+                            if let app = viewModel.apps.first(where: { $0.id == id }) {
+                                Task { await viewModel.selectApp(app) }
+                            }
+                        }
+                    )) { app in
+                        HStack(spacing: 10) {
+                            if let icon = app.icon {
+                                Image(nsImage: icon).resizable().frame(width: 30, height: 30)
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(app.name).font(.system(.body, design: .rounded)).lineLimit(1)
+                                Text(app.lastUsedLabel)
+                                    .font(.caption2)
+                                    .foregroundStyle(app.isStale ? .orange : .secondary)
+                            }
+                            Spacer()
+                            Text(app.sizeBytes.formattedBytes)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 3)
+                        .tag(app.id)
+                    }
+                    .listStyle(.inset)
+                    .scrollContentBackground(.hidden)
                 }
-                .listStyle(.inset)
-                .scrollContentBackground(.hidden)
             }
         }
     }
@@ -90,6 +118,12 @@ private struct PlanDetailView: View {
     @EnvironmentObject private var viewModel: UninstallerViewModel
     let plan: UninstallPlan
 
+    @State private var appExplanation: String?
+    @State private var isExplainingApp = false
+    @State private var leftoverExplanations: [String: String] = [:]
+    @State private var loadingLeftoverID: String?
+    @State private var showingKeySetupFor: ScanItem?
+
     private var bundleItem: ScanItem? { plan.items.first { $0.path == plan.app.bundlePath } }
     private var leftoverItems: [ScanItem] { plan.items.filter { $0.path != plan.app.bundlePath } }
 
@@ -114,9 +148,20 @@ private struct PlanDetailView: View {
                         .foregroundStyle(plan.app.isStale ? .orange : .secondary)
                 }
                 Spacer()
+                AIActionButton(title: "What is this app?", isBusy: isExplainingApp) { await explainApp() }
                 SizeBadge(bytes: plan.totalBytes, tint: .purple)
             }
             .padding()
+
+            if let appExplanation {
+                Text(appExplanation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+                    .background(Color.purple.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+            }
 
             Divider()
 
@@ -148,52 +193,103 @@ private struct PlanDetailView: View {
             Divider()
             footer
         }
+        .sheet(item: $showingKeySetupFor) { item in
+            AIKeySetupSheet(onSaved: { Task { await explainLeftover(item) } })
+        }
     }
 
     private func leftoverRow(_ item: ScanItem, selectable: Bool) -> some View {
-        HStack(spacing: 10) {
-            if selectable {
-                Toggle("", isOn: Binding(
-                    get: { viewModel.selectedLeftoverIDs.contains(item.id) },
-                    set: { _ in viewModel.toggleLeftover(item) }
-                ))
-                .labelsHidden()
-                .toggleStyle(.checkbox)
-            } else {
-                Image(systemName: "app.fill").foregroundStyle(.purple).frame(width: 14)
-            }
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(item.displayName)
-                        .font(.system(.callout, design: .rounded))
-                        .lineLimit(1)
-                    SafetyBadge(level: item.safety.level)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                if selectable {
+                    Toggle("", isOn: Binding(
+                        get: { viewModel.selectedLeftoverIDs.contains(item.id) },
+                        set: { _ in viewModel.toggleLeftover(item) }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.checkbox)
+                } else {
+                    Image(systemName: "app.fill").foregroundStyle(.purple).frame(width: 14)
                 }
-                Text(item.path.path)
-                    .font(.caption)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(item.displayName)
+                            .font(.system(.callout, design: .rounded))
+                            .lineLimit(1)
+                        SafetyBadge(level: item.safety.level)
+                    }
+                    Text(item.path.path)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([item.path])
+                } label: {
+                    Image(systemName: "arrow.up.forward.app")
+                }
+                .buttonStyle(.borderless)
+                .help("Reveal in Finder")
+
+                Button {
+                    if AIAssistService.isAvailable {
+                        Task { await explainLeftover(item) }
+                    } else {
+                        showingKeySetupFor = item
+                    }
+                } label: {
+                    if loadingLeftoverID == item.id {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "sparkles")
+                    }
+                }
+                .buttonStyle(.borderless)
+                .disabled(loadingLeftoverID == item.id)
+                .help("Ask AI what this is")
+
+                Text(item.sizeBytes.formattedBytes)
+                    .font(.system(.caption, design: .rounded).weight(.semibold))
                     .foregroundStyle(.secondary)
             }
 
-            Spacer()
-
-            Button {
-                NSWorkspace.shared.activateFileViewerSelecting([item.path])
-            } label: {
-                Image(systemName: "arrow.up.forward.app")
+            if let explanation = leftoverExplanations[item.id] {
+                Text(explanation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(6)
+                    .background(Color.purple.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                    .padding(.leading, 24)
             }
-            .buttonStyle(.borderless)
-            .help("Reveal in Finder")
-
-            Text(item.sizeBytes.formattedBytes)
-                .font(.system(.caption, design: .rounded).weight(.semibold))
-                .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
         .opacity(selectable && !viewModel.selectedLeftoverIDs.contains(item.id) ? 0.55 : 1)
         .help(item.safety.reason)
+    }
+
+    private func explainApp() async {
+        isExplainingApp = true
+        defer { isExplainingApp = false }
+        do {
+            appExplanation = try await AIAssistService.explainApp(plan.app)
+        } catch {
+            appExplanation = error.localizedDescription
+        }
+    }
+
+    private func explainLeftover(_ item: ScanItem) async {
+        loadingLeftoverID = item.id
+        defer { loadingLeftoverID = nil }
+        do {
+            leftoverExplanations[item.id] = try await AIAssistService.explain(item: item)
+        } catch {
+            leftoverExplanations[item.id] = error.localizedDescription
+        }
     }
 
     private func symbolName(for reason: String) -> String {
@@ -221,14 +317,18 @@ private struct PlanDetailView: View {
             Spacer()
             if !leftoverItems.isEmpty {
                 Button("Clean Selected…") {
-                    appState.requestReview(ReviewManifest(title: "Clean \(plan.app.name) Leftovers", items: viewModel.selectedLeftoverItems))
+                    appState.requestReview(ReviewManifest(title: "Clean \(plan.app.name) Leftovers", items: viewModel.selectedLeftoverItems, onDeleted: { items in
+                        viewModel.removeLeftoverItems(withIDs: Set(items.map(\.id)))
+                    }))
                 }
                 .buttonStyle(.gradient)
                 .controlSize(.large)
                 .disabled(viewModel.selectedLeftoverItems.isEmpty)
             }
             Button("Uninstall Everything…") {
-                appState.requestReview(ReviewManifest(title: "Uninstall \(plan.app.name)", items: plan.items))
+                appState.requestReview(ReviewManifest(title: "Uninstall \(plan.app.name)", items: plan.items, onDeleted: { _ in
+                    viewModel.removeApp(withID: plan.app.id)
+                }))
             }
             .buttonStyle(.gradient(Design.dangerGradient))
             .controlSize(.large)

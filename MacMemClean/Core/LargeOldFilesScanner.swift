@@ -23,23 +23,38 @@ enum LargeOldFilesScanner {
             scanned += 1
             if scanned % 500 == 0 { onProgress(scanned) }
 
+            // A file that's both large and stale used to land in *both* result arrays — same
+            // path, same id, counted and shown twice (double the bytes in the total, two rows for
+            // one physical file in the Review Sheet). Large takes priority and absorbs the "also
+            // old" fact into its own reason text instead, so every file appears exactly once.
+            let isOld: Bool
+            let ageDays: Int?
+            if let cutoffDate, let modified = entry.modifiedAt, modified < cutoffDate {
+                isOld = true
+                ageDays = Calendar.current.dateComponents([.day], from: modified, to: Date()).day ?? options.minAgeDays
+            } else {
+                isOld = false
+                ageDays = nil
+            }
+
             if entry.sizeBytes >= options.minSizeBytes {
+                var reason = "\(entry.sizeBytes.formattedBytes) file"
+                if isOld, let ageDays {
+                    reason += " · not modified in \(ageDays) days"
+                }
                 large.append(ScanItem(
                     path: entry.url,
                     category: .largeFiles,
-                    reason: "\(entry.sizeBytes.formattedBytes) file",
+                    reason: reason,
                     sizeBytes: entry.sizeBytes,
                     modifiedAt: entry.modifiedAt,
                     isDirectory: false
                 ))
-            }
-
-            if let cutoffDate, let modified = entry.modifiedAt, modified < cutoffDate, entry.sizeBytes > 1024 * 1024 {
-                let days = Calendar.current.dateComponents([.day], from: modified, to: Date()).day ?? options.minAgeDays
+            } else if isOld, let ageDays, entry.sizeBytes > 1024 * 1024 {
                 old.append(ScanItem(
                     path: entry.url,
                     category: .oldFiles,
-                    reason: "Not modified in \(days) days",
+                    reason: "Not modified in \(ageDays) days",
                     sizeBytes: entry.sizeBytes,
                     modifiedAt: entry.modifiedAt,
                     isDirectory: false

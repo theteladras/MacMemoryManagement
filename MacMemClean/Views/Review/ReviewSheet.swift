@@ -16,6 +16,7 @@ struct ReviewSheet: View {
     @State private var result: DeleteResult?
     @State private var aiExplanation: [String: String] = [:]
     @State private var aiLoadingID: String?
+    @State private var showingKeySetupFor: ScanItem?
 
     private var itemsToDelete: [ScanItem] {
         manifest.items.filter { !excludedIDs.contains($0.id) }
@@ -31,6 +32,9 @@ struct ReviewSheet: View {
             if let result {
                 resultSummary(result)
             } else {
+                if manifest.requiresAdmin {
+                    adminWarningBanner
+                }
                 if !personalItemsIncluded.isEmpty {
                     personalWarningBanner
                 }
@@ -42,6 +46,9 @@ struct ReviewSheet: View {
         .task {
             permanentDelete = appState.deleteMode == .permanent
             excludedIDs = manifest.preExcludedIDs
+        }
+        .sheet(item: $showingKeySetupFor) { item in
+            AIKeySetupSheet(onSaved: { Task { await explain(item) } })
         }
     }
 
@@ -58,6 +65,24 @@ struct ReviewSheet: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
+    }
+
+    private var adminWarningBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "person.2.badge.gearshape")
+                .foregroundStyle(.red)
+                .font(.title3)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("These files belong to another user account")
+                    .font(.system(.callout, design: .rounded).weight(.semibold))
+                Text("Removing them needs your admin password. \"Move to Trash\" here moves each item into that account's own Trash (they can still recover it); \"Delete Permanently\" removes it immediately.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(Color.red.opacity(0.1))
     }
 
     private var personalWarningBanner: some View {
@@ -120,19 +145,22 @@ struct ReviewSheet: View {
 
                 Spacer()
 
-                if AIAssistService.isAvailable {
-                    Button {
+                Button {
+                    if AIAssistService.isAvailable {
                         Task { await explain(item) }
-                    } label: {
-                        if aiLoadingID == item.id {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Image(systemName: "sparkles")
-                        }
+                    } else {
+                        showingKeySetupFor = item
                     }
-                    .buttonStyle(.borderless)
-                    .help("Ask AI what this is")
+                } label: {
+                    if aiLoadingID == item.id {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "sparkles")
+                    }
                 }
+                .buttonStyle(.borderless)
+                .disabled(aiLoadingID == item.id)
+                .help("Ask AI what this is")
 
                 SizeBadge(bytes: item.sizeBytes, tint: item.category.tint)
             }
@@ -242,9 +270,14 @@ struct ReviewSheet: View {
         isDeleting = true
         defer { isDeleting = false }
         let mode: DeleteMode = permanentDelete ? .permanent : .trash
-        let outcome = await SafeDeleteService.delete(itemsToDelete, mode: mode)
+        let outcome = manifest.requiresAdmin
+            ? await AdminDeleteService.delete(itemsToDelete, mode: mode)
+            : await SafeDeleteService.delete(itemsToDelete, mode: mode)
         result = outcome
         DeletionHistoryStore.shared.record(operationTitle: manifest.title, mode: mode, result: outcome)
+        if !outcome.successes.isEmpty {
+            manifest.onDeleted?(outcome.successes.map(\.item))
+        }
     }
 
     private func explain(_ item: ScanItem) async {

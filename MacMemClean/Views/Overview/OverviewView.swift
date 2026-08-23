@@ -141,7 +141,14 @@ struct OverviewView: View {
                         }
                     }
                     if viewModel.summary.otherBytes > 0 {
-                        CapacityLegendRow(color: .gray, label: "Other", bytes: viewModel.summary.otherBytes)
+                        CapacityLegendRow(
+                            color: .gray,
+                            label: "Other",
+                            bytes: viewModel.summary.otherBytes,
+                            isSelected: viewModel.drillDownCategory == "Other"
+                        ) {
+                            Task { await viewModel.toggleDrillDown("Other") }
+                        }
                     }
                     CapacityLegendRow(color: .secondary.opacity(0.35), label: "Free", bytes: viewModel.summary.freeBytes)
                 }
@@ -212,7 +219,7 @@ struct OverviewView: View {
             // rated "Safe" must start unchecked here, or a personal photo/video that happened to be
             // a large old Downloads file would be pre-selected for deletion.
             let riskyIDs = Set(viewModel.smartScanItems.filter { $0.safety.level != .safe }.map(\.id))
-            appState.requestReview(ReviewManifest(title: "Smart Scan Results", items: viewModel.smartScanItems, preExcludedIDs: riskyIDs))
+            appState.requestReview(ReviewManifest(title: "Smart Scan Results", items: viewModel.smartScanItems, preExcludedIDs: riskyIDs, onDeleted: { viewModel.removeFromSmartScanResults($0) }))
         }
     }
 
@@ -239,7 +246,7 @@ struct OverviewView: View {
             SegmentedCapacityBar.Segment(id: $0.name, fraction: Double($0.bytes) / Double(total), color: $0.tint)
         }
         if viewModel.summary.otherBytes > 0 {
-            segments.append(SegmentedCapacityBar.Segment(id: "other", fraction: Double(viewModel.summary.otherBytes) / Double(total), color: .gray))
+            segments.append(SegmentedCapacityBar.Segment(id: "Other", fraction: Double(viewModel.summary.otherBytes) / Double(total), color: .gray))
         }
         return segments
     }
@@ -276,7 +283,7 @@ struct OverviewView: View {
                 Spacer()
             }
 
-            if historyStore.snapshots.count < 2 {
+            if chartableSnapshots.count < 2 {
                 Text("Not enough history yet — check back after a few more days of use.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -289,7 +296,12 @@ struct OverviewView: View {
                     )
                     .foregroundStyle(by: .value("Series", point.series))
                     .lineStyle(StrokeStyle(lineWidth: point.series == Self.totalSeriesName ? 3 : 1.5, lineCap: .round))
-                    .interpolationMethod(.catmullRom)
+                    // `.linear`, not `.catmullRom` — Charts' spline interpolation has a known
+                    // crash on sparse/uneven series (e.g. a series with very few points, or a
+                    // sharp value jump right after Full Disk Access newly unlocks a much more
+                    // accurate size for a category), which is exactly the shape of data this
+                    // chart produces since not every snapshot has every category.
+                    .interpolationMethod(.linear)
                 }
                 .chartForegroundStyleScale(domain: Self.seriesOrder, range: Self.seriesTints)
                 .chartYAxis {
@@ -318,11 +330,20 @@ struct OverviewView: View {
     private static let totalSeriesName = "Total Used"
     /// Fixed order (rather than derived from a Dictionary) so it lines up 1:1 with `seriesTints` —
     /// matches the same location categories/colors as the capacity bar on this page.
-    private static let seriesOrder: [String] = [totalSeriesName, "Applications", "Documents & Desktop", "Downloads", "Photos, Movies & Music", "System & Library"]
-    private static let seriesTints: [Color] = [.primary, .purple, .indigo, .teal, .pink, .orange]
+    private static let seriesOrder: [String] = [totalSeriesName, "Applications", "Documents & Desktop", "Downloads", "Photos, Movies & Music", "System & Library", "Other"]
+    private static let seriesTints: [Color] = [.primary, .purple, .indigo, .teal, .pink, .orange, .gray]
+
+    /// Snapshots recorded before per-location breakdowns existed have an empty `breakdown`.
+    /// Charting them anyway would draw the white "Total Used" line across the full width while
+    /// every colored line simply doesn't exist yet for that stretch — which reads as "these don't
+    /// add up" even though the underlying numbers are fine. Simplest fix: only chart snapshots
+    /// that actually have a breakdown, so every visible line starts at the same point.
+    private var chartableSnapshots: [StorageSnapshot] {
+        historyStore.snapshots.filter { !$0.breakdown.isEmpty }
+    }
 
     private var trendPoints: [TrendPoint] {
-        historyStore.snapshots.flatMap { snapshot -> [TrendPoint] in
+        chartableSnapshots.flatMap { snapshot -> [TrendPoint] in
             var points = [TrendPoint(date: snapshot.date, series: Self.totalSeriesName, bytes: snapshot.usedBytes)]
             points += snapshot.breakdown.map { TrendPoint(date: snapshot.date, series: $0.name, bytes: $0.bytes) }
             return points
@@ -433,7 +454,7 @@ struct OverviewView: View {
                     .foregroundStyle(.secondary)
                 Button("Review Again") {
                     let riskyIDs = Set(viewModel.smartScanItems.filter { $0.safety.level != .safe }.map(\.id))
-                    appState.requestReview(ReviewManifest(title: "Smart Scan Results", items: viewModel.smartScanItems, preExcludedIDs: riskyIDs))
+                    appState.requestReview(ReviewManifest(title: "Smart Scan Results", items: viewModel.smartScanItems, preExcludedIDs: riskyIDs, onDeleted: { viewModel.removeFromSmartScanResults($0) }))
                 }
                 .buttonStyle(.plain)
                 .font(.caption.weight(.semibold))

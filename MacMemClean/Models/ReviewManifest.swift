@@ -14,6 +14,17 @@ struct ReviewManifest {
     /// but off by default, the same "only Safe is pre-selected" rule every other scanner follows.
     var preExcludedIDs: Set<String> = []
 
+    /// True only for the multi-user cleanup flow: these paths belong to another account, so
+    /// `ReviewSheet` routes deletion through `AdminDeleteService` (admin-authorized shell) instead
+    /// of `SafeDeleteService`, which can't touch files this process doesn't own.
+    var requiresAdmin: Bool = false
+
+    /// Called once, after a delete finishes, with exactly the items that were actually removed —
+    /// lets the scan view that originated this review prune them from its own results. Without
+    /// this, a successfully deleted item stays visible in the list (still selectable, still
+    /// counted in totals) until the next full rescan, which reads as "did this even work?".
+    var onDeleted: (([ScanItem]) -> Void)?
+
     var totalBytes: Int64 { items.reduce(0) { $0 + $1.sizeBytes } }
     var count: Int { items.count }
 

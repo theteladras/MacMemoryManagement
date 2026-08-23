@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 
 enum DuplicateFinder {
-    struct DuplicateGroup: Identifiable {
+    struct DuplicateGroup: Identifiable, Codable {
         let id: String // hash
         let items: [ScanItem] // sorted oldest first; caller pre-selects all but items[0] to remove
         var sizeEach: Int64 { items.first?.sizeBytes ?? 0 }

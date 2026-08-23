@@ -7,6 +7,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Applies whatever was persisted last time — if menu-bar-only mode was on, the Dock icon
+        // needs to be hidden again from the very first frame, not just when the toggle is flipped.
+        AppSettings.shared.applyActivationPolicy()
+    }
 }
 
 @main

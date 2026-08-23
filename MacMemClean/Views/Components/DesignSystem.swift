@@ -112,3 +112,22 @@ extension ButtonStyle where Self == GradientButtonStyle {
     static var gradient: GradientButtonStyle { GradientButtonStyle() }
     static func gradient(_ gradient: LinearGradient) -> GradientButtonStyle { GradientButtonStyle(gradient: gradient) }
 }
+
+/// A hand-drawn spinner, not `ProgressView` — on macOS the indeterminate `ProgressView` style is
+/// backed by `NSProgressIndicator` and largely ignores `.tint()`, so it renders as a dark/gray
+/// spinner regardless of what color you ask for. That looks broken sitting on a vivid selected
+/// row (e.g. white was requested, black showed up). This respects any color exactly.
+struct Spinner: View {
+    var color: Color = .secondary
+    var lineWidth: CGFloat = 2
+    @State private var isSpinning = false
+
+    var body: some View {
+        Circle()
+            .trim(from: 0.05, to: 0.85)
+            .stroke(color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+            .rotationEffect(.degrees(isSpinning ? 360 : 0))
+            .animation(.linear(duration: 0.8).repeatForever(autoreverses: false), value: isSpinning)
+            .onAppear { isSpinning = true }
+    }
+}

@@ -2,7 +2,11 @@ import SwiftUI
 
 struct JunkScanView: View {
     @EnvironmentObject private var appState: AppState
-    @StateObject private var viewModel = JunkScanViewModel()
+    @ObservedObject private var viewModel = JunkScanViewModel.shared
+    @State private var aiSummary: String?
+    @State private var isSummarizing = false
+    @State private var isSuggesting = false
+    @State private var suggestionNote: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -16,8 +20,30 @@ struct JunkScanView: View {
 
             toolbar
 
+            if let change = viewModel.lastChange {
+                ScanChangeBanner(change: change) { viewModel.lastChange = nil }
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+            }
+            if let aiSummary {
+                AISummaryBanner(text: aiSummary) { self.aiSummary = nil }
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+            }
+            if let suggestionNote {
+                AISummaryBanner(text: suggestionNote, symbolName: "checkmark.circle") { self.suggestionNote = nil }
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+            }
+
             Group {
-                if viewModel.isScanning {
+                // Cached/previous results (if any) take priority over the scanning spinner, so a
+                // background refresh updates the list in place instead of blanking the screen —
+                // the spinner only owns the screen for a genuine first-ever scan.
+                if viewModel.hasScanned && !viewModel.items.isEmpty {
+                    list
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                } else if viewModel.isScanning {
                     ProgressView(viewModel.statusText)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .transition(.opacity)
@@ -30,12 +56,9 @@ struct JunkScanView: View {
                         action: { Task { await viewModel.scan() } }
                     )
                     .transition(.opacity)
-                } else if viewModel.items.isEmpty {
+                } else {
                     EmptyStateView(symbolName: "checkmark.circle", title: "All Clean", message: "No junk found in known locations.")
                         .transition(.opacity)
-                } else {
-                    list
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
             }
             .animation(.easeInOut(duration: 0.25), value: viewModel.isScanning)
@@ -46,23 +69,58 @@ struct JunkScanView: View {
 
     private var toolbar: some View {
         HStack {
-            if viewModel.hasScanned && !viewModel.isScanning {
+            if viewModel.hasScanned {
                 Text("\(viewModel.items.count) items found")
                     .font(.system(.callout, design: .rounded))
                     .foregroundStyle(.secondary)
+                if viewModel.isScanning {
+                    HStack(spacing: 4) {
+                        ProgressView().controlSize(.small)
+                        Text("Refreshing…").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 Spacer()
                 Button("Select All") { viewModel.selectAll() }
                 Button("Select None") { viewModel.selectNone() }
+                AIActionButton(title: "Summarize", isBusy: isSummarizing) { await summarize() }
+                AIActionButton(title: "AI Suggest", isBusy: isSuggesting) { await suggestSelection() }
                 Button {
                     Task { await viewModel.scan() }
                 } label: {
                     Label("Rescan", systemImage: "arrow.clockwise")
                 }
+                .disabled(viewModel.isScanning)
             } else {
                 Spacer()
             }
         }
         .padding()
+    }
+
+    private func summarize() async {
+        isSummarizing = true
+        defer { isSummarizing = false }
+        do {
+            aiSummary = try await AIAssistService.summarize(items: viewModel.items, context: "Caches & Junk")
+        } catch {
+            aiSummary = error.localizedDescription
+        }
+    }
+
+    private func suggestSelection() async {
+        isSuggesting = true
+        defer { isSuggesting = false }
+        do {
+            let suggestions = try await AIAssistService.suggestSelection(items: viewModel.items)
+            for item in viewModel.items where suggestions[item.id] != nil {
+                if !viewModel.selectedIDs.contains(item.id) { viewModel.toggle(item) }
+            }
+            suggestionNote = suggestions.isEmpty
+                ? "AI didn't find any additional items it was confident about."
+                : "AI selected \(suggestions.count) item(s): " + suggestions.values.prefix(4).joined(separator: "; ") + (suggestions.count > 4 ? "…" : "")
+        } catch {
+            suggestionNote = error.localizedDescription
+        }
     }
 
     private var groupedItems: [(category: ScanCategory, items: [ScanItem])] {
@@ -108,7 +166,7 @@ struct JunkScanView: View {
                 }
                 Spacer()
                 Button("Review & Clean…") {
-                    appState.requestReview(ReviewManifest(title: "Clean Junk & Caches", items: viewModel.selectedItems))
+                    appState.requestReview(ReviewManifest(title: "Clean Junk & Caches", items: viewModel.selectedItems, onDeleted: { viewModel.removeFromResults($0) }))
                 }
                 .buttonStyle(.gradient)
                 .controlSize(.large)

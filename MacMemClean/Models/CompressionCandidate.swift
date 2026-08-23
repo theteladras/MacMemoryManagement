@@ -3,7 +3,7 @@ import Foundation
 /// A file eligible for transparent, lossless compression — deliberately a separate model from
 /// `ScanItem` so this feature can never accidentally flow into `SafeDeleteService`. Nothing here
 /// is ever deleted; compressed files remain byte-identical when read, just smaller on disk.
-struct CompressionCandidate: Identifiable, Hashable {
+struct CompressionCandidate: Identifiable, Hashable, Codable {
     static func == (lhs: CompressionCandidate, rhs: CompressionCandidate) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 

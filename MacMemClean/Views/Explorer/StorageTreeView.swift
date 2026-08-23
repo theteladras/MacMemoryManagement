@@ -102,7 +102,13 @@ struct StorageTreeView: View {
                 Button("Clear") { viewModel.clearSelection() }
             }
             Button("Review & Clean…") {
-                appState.requestReview(ReviewManifest(title: "Clean Selected Items", items: viewModel.selectedItems))
+                appState.requestReview(ReviewManifest(title: "Clean Selected Items", items: viewModel.selectedItems, onDeleted: { _ in
+                    // Explorer is a live filesystem browser, not a cached scan list — the simplest
+                    // correct fix is clearing the now-stale selection and re-listing the root
+                    // (deeper expanded folders will show correctly next time they're opened).
+                    viewModel.clearSelection()
+                    Task { await viewModel.refreshRootIfStale(force: true) }
+                }))
             }
             .buttonStyle(.gradient)
             .controlSize(.large)

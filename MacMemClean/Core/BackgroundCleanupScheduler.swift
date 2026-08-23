@@ -45,6 +45,10 @@ final class BackgroundCleanupScheduler: ObservableObject {
         isRunning = true
         defer { isRunning = false }
 
+        if settings.autoEmptyTrash {
+            await emptyOldTrashItems()
+        }
+
         let aggressiveness = settings.aggressiveness
         let items = await Task.detached { Self.performScan(aggressiveness: aggressiveness) }.value
 
@@ -53,6 +57,43 @@ final class BackgroundCleanupScheduler: ObservableObject {
         guard !items.isEmpty else { return }
         onFound?(items)
         postNotification(for: items)
+    }
+
+    /// The one deletion path in the whole app that skips the Review Sheet — see the comment on
+    /// `AutoCleanupSettings.autoEmptyTrash` for why that's an intentional exception, not a
+    /// shortcut. Still funnels through `SafeDeleteService` (re-validated against `ProtectedPaths`
+    /// immediately before removal) and gets logged to `DeletionHistoryStore`.
+    private func emptyOldTrashItems() async {
+        let days = settings.trashAgeThresholdDays
+        let items = await Task.detached { Self.oldTrashItems(olderThanDays: days) }.value
+        guard !items.isEmpty else { return }
+
+        let outcome = await SafeDeleteService.delete(items, mode: .permanent)
+        DeletionHistoryStore.shared.record(operationTitle: "Automatic Trash Cleanup", mode: .permanent, result: outcome)
+    }
+
+    /// Ages Trash contents by when they were *moved into* `.Trash` (`addedToDirectoryDate`), not
+    /// by their own content modification date — a photo trashed yesterday shouldn't count as
+    /// "old" just because it was taken years ago. Falls back to modification date only if that
+    /// resource value is unavailable.
+    private nonisolated static func oldTrashItems(olderThanDays days: Int) -> [ScanItem] {
+        guard let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) else { return [] }
+        let trashURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash")
+        let listing = FileSystemScanner.immediateChildren(of: trashURL, includeHidden: true)
+
+        return listing.entries.compactMap { entry -> ScanItem? in
+            let addedDate = (try? entry.url.resourceValues(forKeys: [.addedToDirectoryDateKey]))?.addedToDirectoryDate ?? entry.modifiedAt
+            guard let addedDate, addedDate < cutoff else { return nil }
+            let dateLabel = DateFormatter.localizedString(from: addedDate, dateStyle: .medium, timeStyle: .none)
+            return ScanItem(
+                path: entry.url,
+                category: .trash,
+                reason: "In Trash since \(dateLabel)",
+                sizeBytes: entry.sizeBytes,
+                modifiedAt: entry.modifiedAt,
+                isDirectory: entry.isDirectory
+            )
+        }
     }
 
     private nonisolated static func performScan(aggressiveness: CleanupAggressiveness) -> [ScanItem] {

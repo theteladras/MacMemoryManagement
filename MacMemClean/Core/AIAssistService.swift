@@ -24,13 +24,9 @@ enum AIAssistService {
     }
 
     static func explain(item: ScanItem) async throws -> String {
-        guard let apiKey = KeychainService.loadAPIKey(), !apiKey.isEmpty else {
-            throw AIError.noAPIKey
-        }
-
         let sizeText = item.sizeBytes.formattedBytes
         let modifiedText = item.modifiedAt.map { DateFormatter.localizedString(from: $0, dateStyle: .medium, timeStyle: .none) } ?? "unknown"
-        let userPrompt = """
+        let prompt = """
         A macOS cleanup app found this item on disk. Based only on its name/path/metadata \
         (its contents were NOT sent to you), explain in 2-3 short sentences what it most likely \
         is and whether it's generally safe to delete or move to Trash. If you're not confident, say so.
@@ -42,6 +38,105 @@ enum AIAssistService {
         Last modified: \(modifiedText)
         Is directory: \(item.isDirectory)
         """
+        return try await send(prompt: prompt, maxTokens: 256)
+    }
+
+    /// Duplicate-set specific: which copy is most likely the "right"/canonical one to keep, given
+    /// where each copy lives and when it was last touched — a judgment the generic "explain a
+    /// single item" prompt can't make since it never sees the sibling copies for context.
+    static func explainDuplicateGroup(_ group: DuplicateFinder.DuplicateGroup) async throws -> String {
+        let listing = group.items.enumerated().map { index, item -> String in
+            let modified = item.modifiedAt.map { DateFormatter.localizedString(from: $0, dateStyle: .medium, timeStyle: .none) } ?? "unknown"
+            return "\(index + 1). \(item.path.path) — modified \(modified)"
+        }.joined(separator: "\n")
+
+        let prompt = """
+        These \(group.items.count) files are byte-for-byte identical copies (\(group.sizeEach.formattedBytes) each), \
+        found by a macOS cleanup app. Based only on their paths and modification dates, say in 2-3 short \
+        sentences which copy looks like the "right"/original one to keep and why (e.g. which folder looks \
+        more intentional, which is oldest/newest), and confirm the others look safe to remove.
+
+        \(listing)
+        """
+        return try await send(prompt: prompt, maxTokens: 256)
+    }
+
+    /// Uninstaller specific: helps decide whether an unfamiliar app is safe to remove, based only
+    /// on its name/bundle id and how long it's gone unused — never anything from inside the app.
+    static func explainApp(_ app: AppInfo) async throws -> String {
+        let prompt = """
+        A macOS uninstaller app is showing this application to the user. Based only on its name/bundle \
+        identifier and last-used date, explain in 2-3 short sentences what this app most likely is/does \
+        and whether it looks safe to uninstall. If you don't recognize it, say so plainly rather than guessing.
+
+        Name: \(app.name)
+        Bundle identifier: \(app.bundleIdentifier ?? "unknown")
+        \(app.lastUsedLabel)
+        Size: \(app.sizeBytes.formattedBytes)
+        """
+        return try await send(prompt: prompt, maxTokens: 256)
+    }
+
+    /// Plain-language read on a whole scan result: what's using the most space, what's probably
+    /// safe, what deserves a closer look. Capped to the largest 40 items so the prompt (and cost)
+    /// stays small regardless of how big the scan was.
+    static func summarize(items: [ScanItem], context: String) async throws -> String {
+        guard !items.isEmpty else { return "Nothing found to summarize." }
+        let top = items.sorted { $0.sizeBytes > $1.sizeBytes }.prefix(40)
+        let listing = top.map { "- \($0.displayName) — \($0.sizeBytes.formattedBytes), \($0.category.rawValue), \($0.safety.level.shortLabel)" }.joined(separator: "\n")
+        let totalBytes = items.reduce(Int64(0)) { $0 + $1.sizeBytes }
+
+        let prompt = """
+        A macOS cleanup app just ran a "\(context)" scan and found \(items.count) items totaling \(totalBytes.formattedBytes). \
+        Here are the largest ones (name, size, category, safety rating):
+
+        \(listing)
+
+        In 3-4 short sentences: summarize what's actually taking up the space, and give a plain-language \
+        read on what's probably fine to remove versus what's worth a closer look before deleting. Don't \
+        repeat the raw list back.
+        """
+        return try await send(prompt: prompt, maxTokens: 300)
+    }
+
+    /// Asks which of the given items are worth suggesting for removal, returning `[item.id: reason]`.
+    /// Personal-rated items are filtered out before the request even reaches the model — AI
+    /// suggestions never touch anything the app itself won't auto-select.
+    static func suggestSelection(items: [ScanItem]) async throws -> [String: String] {
+        let candidates = items.filter { $0.safety.level != .personal }.prefix(60)
+        guard !candidates.isEmpty else { return [:] }
+        let listing = candidates.map { "\($0.id)|\($0.displayName)|\($0.sizeBytes.formattedBytes)|\($0.category.rawValue)|\($0.safety.level.shortLabel)|\($0.reason)" }.joined(separator: "\n")
+
+        let prompt = """
+        Below are candidate files/folders a macOS cleanup app found (anything rated "Personal" has \
+        already been excluded — never suggest those). Each line is: id|name|size|category|safety|reason.
+
+        \(listing)
+
+        Reply with ONLY a JSON object mapping id to a short reason (under 12 words) for the ones you'd \
+        suggest removing. Skip anything you're not fairly confident about. If none seem worth suggesting, \
+        reply with {}. No markdown, no explanation outside the JSON.
+        """
+        let raw = try await send(prompt: prompt, maxTokens: 1024)
+        return parseSuggestionJSON(raw, validIDs: Set(candidates.map(\.id)))
+    }
+
+    private static func parseSuggestionJSON(_ text: String, validIDs: Set<String>) -> [String: String] {
+        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("```") {
+            cleaned = cleaned.replacingOccurrences(of: "```json", with: "").replacingOccurrences(of: "```", with: "")
+            cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard let data = cleaned.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: String]
+        else { return [:] }
+        return object.filter { validIDs.contains($0.key) }
+    }
+
+    private static func send(prompt: String, maxTokens: Int) async throws -> String {
+        guard let apiKey = KeychainService.loadAPIKey(), !apiKey.isEmpty else {
+            throw AIError.noAPIKey
+        }
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
@@ -51,9 +146,9 @@ enum AIAssistService {
 
         let body: [String: Any] = [
             "model": model,
-            "max_tokens": 256,
-            "system": "You are a concise macOS storage-cleanup assistant. Keep answers to 2-3 sentences.",
-            "messages": [["role": "user", "content": userPrompt]],
+            "max_tokens": maxTokens,
+            "system": "You are a concise macOS storage-cleanup assistant.",
+            "messages": [["role": "user", "content": prompt]],
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 

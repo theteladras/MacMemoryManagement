@@ -12,6 +12,7 @@ enum ScanCategory: String, CaseIterable, Identifiable, Codable {
     case oldFiles = "Old Files"
     case duplicates = "Duplicates"
     case explorerSelection = "Selected in Explorer"
+    case otherUserJunk = "Other User's Files"
 
     var id: String { rawValue }
 
@@ -28,6 +29,7 @@ enum ScanCategory: String, CaseIterable, Identifiable, Codable {
         case .oldFiles: return "clock.arrow.circlepath"
         case .duplicates: return "doc.on.doc"
         case .explorerSelection: return "list.bullet.indent"
+        case .otherUserJunk: return "person.2.fill"
         }
     }
 
@@ -44,6 +46,7 @@ enum ScanCategory: String, CaseIterable, Identifiable, Codable {
         case .oldFiles: return .brown
         case .duplicates: return .yellow
         case .explorerSelection: return .cyan
+        case .otherUserJunk: return .red
         }
     }
 

@@ -30,6 +30,20 @@ enum SafetyAssessor {
     ]
 
     static func assess(_ item: ScanItem) -> SafetyAssessment {
+        // A user's own rule wins outright, before any built-in heuristic gets a say — that's the
+        // entire point of letting someone define one: to correct or extend what the app would
+        // otherwise guess. "Never delete" escalates to personal (still visible for review, never
+        // pre-selected); "treat as junk" drops straight to safe, even overriding what would
+        // otherwise be flagged personal.
+        if let treatment = FlaggingRulesStore.shared.matchingTreatment(for: item) {
+            switch treatment {
+            case .neverDelete:
+                return SafetyAssessment(level: .personal, reason: "Protected by your custom rule — never suggested for deletion.")
+            case .flagAsJunk:
+                return SafetyAssessment(level: .safe, reason: "Matches your custom rule — treated as safe to remove.")
+            }
+        }
+
         var level = baseline(for: item.category)
         var reason = baseReason(for: item.category)
 
@@ -40,7 +54,7 @@ enum SafetyAssessor {
         // otherwise personal-looking tree (e.g. `node_modules` sitting under a project in Documents).
         let sitsInDisposableFolder = !components.isDisjoint(with: disposableFolderNames)
 
-        if sitsInDisposableFolder && level != .safe && item.category != .duplicates {
+        if sitsInDisposableFolder && level != .safe && item.category != .duplicates && item.category != .otherUserJunk {
             level = .safe
             reason = "Regenerable build/cache artifact — safe to remove."
         } else if disposableArchiveExtensions.contains(ext) {
@@ -77,6 +91,11 @@ enum SafetyAssessor {
             return .caution
         case .largeFiles, .oldFiles, .duplicates, .explorerSelection:
             return .caution
+        case .otherUserJunk:
+            // Never .safe, even though the underlying paths (Caches/Logs/Trash) mirror the app's
+            // own safe catalog: it belongs to a different account, so it always needs a human to
+            // look before anything happens, no matter how disposable the location usually is.
+            return .caution
         }
     }
 
@@ -93,6 +112,7 @@ enum SafetyAssessor {
         case .oldFiles: return "Not opened in a while — review before removing."
         case .duplicates: return "Duplicate file."
         case .explorerSelection: return "Selected from the storage browser — review before removing."
+        case .otherUserJunk: return "Cache/log/trash item belonging to another user account — review before removing."
         }
     }
 

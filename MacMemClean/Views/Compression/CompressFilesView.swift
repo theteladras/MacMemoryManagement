@@ -5,7 +5,7 @@ import SwiftUI
 /// files stay byte-identical when opened, they just take less space on disk. A separate flow from
 /// every other scanner in the app: nothing here is ever deleted.
 struct CompressFilesView: View {
-    @StateObject private var viewModel = CompressionViewModel()
+    @ObservedObject private var viewModel = CompressionViewModel.shared
     @State private var confirmingCompress = false
 
     var body: some View {
@@ -13,8 +13,16 @@ struct CompressFilesView: View {
             header
             controls
 
+            if let change = viewModel.lastChange {
+                ScanChangeBanner(change: change) { viewModel.lastChange = nil }
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+            }
+
             Group {
-                if viewModel.isScanning {
+                // Cached/previous results take priority over the scanning spinner — see
+                // `JunkScanView` for the same pattern and why.
+                if viewModel.isScanning && !viewModel.hasScanned {
                     ProgressView("Scanning \(viewModel.scanRoot.lastPathComponent)…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .transition(.opacity)

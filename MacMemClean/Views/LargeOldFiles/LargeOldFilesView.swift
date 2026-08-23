@@ -3,14 +3,36 @@ import SwiftUI
 
 struct LargeOldFilesView: View {
     @EnvironmentObject private var appState: AppState
-    @StateObject private var viewModel = LargeOldFilesViewModel()
+    @ObservedObject private var viewModel = LargeOldFilesViewModel.shared
+    @State private var aiSummary: String?
+    @State private var isSummarizing = false
+    @State private var isSuggesting = false
+    @State private var suggestionNote: String?
 
     var body: some View {
         VStack(spacing: 0) {
             controls
 
+            if let change = viewModel.lastChange {
+                ScanChangeBanner(change: change) { viewModel.lastChange = nil }
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+            }
+            if let aiSummary {
+                AISummaryBanner(text: aiSummary) { self.aiSummary = nil }
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+            }
+            if let suggestionNote {
+                AISummaryBanner(text: suggestionNote, symbolName: "checkmark.circle") { self.suggestionNote = nil }
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+            }
+
             Group {
-                if viewModel.isScanning {
+                // Cached/previous results take priority over the scanning spinner — see
+                // `JunkScanView` for the same pattern and why.
+                if viewModel.isScanning && !viewModel.hasScanned {
                     ProgressView("Scanning \(viewModel.scanRoot.lastPathComponent)…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .transition(.opacity)
@@ -26,6 +48,12 @@ struct LargeOldFilesView: View {
                 } else if viewModel.allItems.isEmpty {
                     EmptyStateView(symbolName: "checkmark.circle", title: "Nothing Found", message: "No large or stale files matched your thresholds.")
                         .transition(.opacity)
+                } else if viewModel.filteredLargeItems.isEmpty && viewModel.filteredOldItems.isEmpty {
+                    EmptyStateView(symbolName: "line.3.horizontal.decrease.circle", title: "No Matches", message: "Nothing matches the current filters.", actionTitle: "Clear Filters") {
+                        viewModel.safetyFilter = nil
+                        viewModel.typeFilter = nil
+                    }
+                    .transition(.opacity)
                 } else {
                     list
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -52,6 +80,10 @@ struct LargeOldFilesView: View {
                     .truncationMode(.middle)
                 Button("Choose…") { chooseFolder() }
                 Spacer()
+                if viewModel.hasScanned && !viewModel.allItems.isEmpty {
+                    AIActionButton(title: "Summarize", isBusy: isSummarizing) { await summarize() }
+                    AIActionButton(title: "AI Suggest", isBusy: isSuggesting) { await suggestSelection() }
+                }
                 Button {
                     Task { await viewModel.scan() }
                 } label: {
@@ -77,34 +109,89 @@ struct LargeOldFilesView: View {
                 }
             }
             .font(.callout)
+
+            if viewModel.hasScanned && !viewModel.allItems.isEmpty {
+                filterBar
+            }
         }
         .cardStyle(padding: 16)
         .padding([.horizontal, .top])
     }
 
+    private var filterBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .foregroundStyle(.secondary)
+
+            Menu {
+                Button("All Safety Levels") { viewModel.safetyFilter = nil }
+                Divider()
+                ForEach([SafetyLevel.safe, .caution, .personal], id: \.self) { level in
+                    Button {
+                        viewModel.safetyFilter = level
+                    } label: {
+                        Label(level.shortLabel, systemImage: level.symbolName)
+                    }
+                }
+            } label: {
+                Label(viewModel.safetyFilter?.shortLabel ?? "Safety: All", systemImage: viewModel.safetyFilter?.symbolName ?? "shield")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+
+            Menu {
+                Button("All File Types") { viewModel.typeFilter = nil }
+                Divider()
+                ForEach(viewModel.availableTypeFilters) { category in
+                    Button {
+                        viewModel.typeFilter = category
+                    } label: {
+                        Label(category.rawValue, systemImage: category.symbolName)
+                    }
+                }
+            } label: {
+                Label(viewModel.typeFilter?.rawValue ?? "Type: All", systemImage: viewModel.typeFilter?.symbolName ?? "doc")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+
+            if viewModel.hasActiveFilters {
+                Button("Clear") {
+                    viewModel.safetyFilter = nil
+                    viewModel.typeFilter = nil
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+            }
+
+            Spacer()
+        }
+        .font(.callout)
+    }
+
     private var list: some View {
         VStack(spacing: 0) {
             List {
-                if !viewModel.largeItems.isEmpty {
+                if !viewModel.filteredLargeItems.isEmpty {
                     Section {
-                        ForEach(viewModel.largeItems) { item in
+                        ForEach(viewModel.filteredLargeItems) { item in
                             ScanItemRow(item: item, isSelected: viewModel.selectedIDs.contains(item.id)) {
                                 viewModel.toggle(item)
                             }
                         }
                     } header: {
-                        SectionHeaderBar(title: "Large Files", symbolName: "doc.badge.arrow.up", tint: .pink, items: viewModel.largeItems)
+                        SectionHeaderBar(title: "Large Files", symbolName: "doc.badge.arrow.up", tint: .pink, items: viewModel.filteredLargeItems)
                     }
                 }
-                if !viewModel.oldItems.isEmpty {
+                if !viewModel.filteredOldItems.isEmpty {
                     Section {
-                        ForEach(viewModel.oldItems) { item in
+                        ForEach(viewModel.filteredOldItems) { item in
                             ScanItemRow(item: item, isSelected: viewModel.selectedIDs.contains(item.id)) {
                                 viewModel.toggle(item)
                             }
                         }
                     } header: {
-                        SectionHeaderBar(title: "Old Files", symbolName: "clock.arrow.circlepath", tint: .brown, items: viewModel.oldItems)
+                        SectionHeaderBar(title: "Old Files", symbolName: "clock.arrow.circlepath", tint: .brown, items: viewModel.filteredOldItems)
                     }
                 }
             }
@@ -122,13 +209,39 @@ struct LargeOldFilesView: View {
                 }
                 Spacer()
                 Button("Review & Clean…") {
-                    appState.requestReview(ReviewManifest(title: "Clean Large & Old Files", items: viewModel.selectedItems))
+                    appState.requestReview(ReviewManifest(title: "Clean Large & Old Files", items: viewModel.selectedItems, onDeleted: { viewModel.removeFromResults($0) }))
                 }
                 .buttonStyle(.gradient)
                 .controlSize(.large)
                 .disabled(viewModel.selectedItems.isEmpty)
             }
             .padding()
+        }
+    }
+
+    private func summarize() async {
+        isSummarizing = true
+        defer { isSummarizing = false }
+        do {
+            aiSummary = try await AIAssistService.summarize(items: viewModel.allItems, context: "Large & Old Files")
+        } catch {
+            aiSummary = error.localizedDescription
+        }
+    }
+
+    private func suggestSelection() async {
+        isSuggesting = true
+        defer { isSuggesting = false }
+        do {
+            let suggestions = try await AIAssistService.suggestSelection(items: viewModel.allItems)
+            for item in viewModel.allItems where suggestions[item.id] != nil {
+                if !viewModel.selectedIDs.contains(item.id) { viewModel.toggle(item) }
+            }
+            suggestionNote = suggestions.isEmpty
+                ? "AI didn't find any additional items it was confident about."
+                : "AI selected \(suggestions.count) item(s): " + suggestions.values.prefix(4).joined(separator: "; ") + (suggestions.count > 4 ? "…" : "")
+        } catch {
+            suggestionNote = error.localizedDescription
         }
     }
 

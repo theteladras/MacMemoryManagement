@@ -36,11 +36,11 @@ enum FileSystemScanner {
     /// object per file) — the difference between a tree browser that opens instantly and one that
     /// looks permanently stuck on folders like `~/Library`. Falls back to the enumerator if `du`
     /// is ever unavailable.
-    static func sizeOf(_ url: URL) -> Int64 {
-        sizeAndStatus(of: url).0
+    static func sizeOf(_ url: URL, timeout: TimeInterval = duTimeoutSeconds) -> Int64 {
+        sizeAndStatus(of: url, timeout: timeout).0
     }
 
-    static func sizeAndStatus(of url: URL) -> (Int64, SizeStatus) {
+    static func sizeAndStatus(of url: URL, timeout: TimeInterval = duTimeoutSeconds) -> (Int64, SizeStatus) {
         let fm = FileManager.default
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return (0, .ok) }
@@ -50,7 +50,7 @@ enum FileSystemScanner {
             return (Int64(values?.fileSize ?? 0), .ok)
         }
 
-        switch duSize(of: url) {
+        switch duSize(of: url, timeout: timeout) {
         case .value(let bytes):
             return (bytes, .ok)
         case .timedOut:
@@ -74,9 +74,9 @@ enum FileSystemScanner {
     /// system permission alert — if that dialog isn't answered promptly, the read blocks
     /// indefinitely. This timeout guarantees the scan itself can never hang forever regardless of
     /// the cause; the folder just gets reported as unreadable and the rest of the scan continues.
-    private static let duTimeoutSeconds: TimeInterval = 6
+    static let duTimeoutSeconds: TimeInterval = 6
 
-    private static func duSize(of url: URL) -> DuResult {
+    private static func duSize(of url: URL, timeout: TimeInterval) -> DuResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/du")
         process.arguments = ["-sk", url.path]
@@ -93,7 +93,7 @@ enum FileSystemScanner {
             return .processUnavailable
         }
 
-        guard doneSignal.wait(timeout: .now() + duTimeoutSeconds) == .success else {
+        guard doneSignal.wait(timeout: .now() + timeout) == .success else {
             process.terminationHandler = nil
             process.terminate()
             return .timedOut
@@ -132,9 +132,10 @@ enum FileSystemScanner {
     /// concurrently — sizing e.g. 9 top-level folders in parallel instead of one after another is the
     /// difference between opening Home in a couple of seconds versus waiting for the slowest folder
     /// (usually `Library`) to finish before anything else can even start.
-    static func immediateChildren(of directory: URL) -> DirectoryListing {
+    static func immediateChildren(of directory: URL, includeHidden: Bool = false) -> DirectoryListing {
         let fm = FileManager.default
-        guard let names = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: resourceKeys, options: [.skipsHiddenFiles]) else {
+        let options: FileManager.DirectoryEnumerationOptions = includeHidden ? [] : [.skipsHiddenFiles]
+        guard let names = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: resourceKeys, options: options) else {
             return DirectoryListing(entries: [], listable: false)
         }
 
@@ -183,7 +184,7 @@ enum FileSystemScanner {
 
 /// Minimal lock-protected box for collecting results from `DispatchQueue.concurrentPerform`, where
 /// multiple threads write to a shared dictionary at once.
-private final class ThreadSafeBox<Value> {
+final class ThreadSafeBox<Value> {
     private var storage: Value
     private let lock = NSLock()
 

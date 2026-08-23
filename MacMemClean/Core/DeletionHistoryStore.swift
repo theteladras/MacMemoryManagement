@@ -10,6 +10,7 @@ final class DeletionHistoryStore: ObservableObject {
     @Published private(set) var entries: [DeletionLogEntry] = []
 
     private let fileURL: URL
+    private var retentionDays: Int { AppSettings.shared.historyRetentionDays }
 
     private init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -18,6 +19,26 @@ final class DeletionHistoryStore: ObservableObject {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         fileURL = dir.appendingPathComponent("history.json")
         entries = Self.load(from: fileURL)
+        let before = entries.count
+        trimToRetention()
+        if entries.count != before { persist() }
+    }
+
+    /// Applies the current retention window — called at launch and after every `record()`, same
+    /// reasoning as `StorageHistoryStore.trimToRetention()`. This store previously had no
+    /// retention at all and grew forever; entries older than the window are now dropped, oldest
+    /// first, on each write.
+    func trimToRetention() {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -retentionDays, to: Date()) ?? .distantPast
+        entries.removeAll { $0.date < cutoff }
+    }
+
+    /// For Settings to call right when the retention slider moves — otherwise a lowered value
+    /// would silently do nothing until the next entry happens to be recorded.
+    func applyRetentionNow() {
+        let before = entries.count
+        trimToRetention()
+        if entries.count != before { persist() }
     }
 
     var totalFreedBytes: Int64 {
@@ -47,6 +68,7 @@ final class DeletionHistoryStore: ObservableObject {
 
         guard !newEntries.isEmpty else { return }
         entries.insert(contentsOf: newEntries.reversed(), at: 0)
+        trimToRetention()
         persist()
     }
 
