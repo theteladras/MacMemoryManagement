@@ -1,4 +1,4 @@
-name: MacMemClean
+name: MacMemMan
 options:
   bundleIdPrefix: com.sanelhadzini
   deploymentTarget:
@@ -12,17 +12,17 @@ settings:
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: ""
 targets:
-  MacMemClean:
+  MacMemMan:
     type: application
     platform: macOS
     sources:
-      - path: MacMemClean
+      - path: MacMemMan
         excludes:
           - "**/*.entitlements"
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.sanelhadzini.macmemclean
-        PRODUCT_NAME: MacMemClean
+        PRODUCT_BUNDLE_IDENTIFIER: com.sanelhadzini.macmemman
+        PRODUCT_NAME: MacMemMan
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -36,16 +36,16 @@ targets:
         NSPrincipalClass: NSApplication
         LSUIElement: false
     entitlements:
-      path: MacMemClean/Resources/MacMemClean.entitlements
+      path: MacMemMan/Resources/MacMemMan.entitlements
       properties:
         com.apple.security.app-sandbox: false
         com.apple.security.network.client: true
         com.apple.security.files.user-selected.read-write: true
 schemes:
-  MacMemClean:
+  MacMemMan:
     build:
       targets:
-        MacMemClean: all
+        MacMemMan: all
     run:
       config: Debug
     archive:

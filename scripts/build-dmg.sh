@@ -1,12 +1,12 @@
 #!/bin/bash
-# Builds MacMemClean in Release configuration and packages it into a distributable .dmg —
+# Builds MacMemMan in Release configuration and packages it into a distributable .dmg —
 # the classic "drag the app into Applications" installer image.
 #
 # Usage:
 #   ./scripts/build-dmg.sh
 #
 # Output:
-#   ./dist/MacMemClean.dmg
+#   ./dist/MacMemMan.dmg
 #
 # Important — read before sending this to someone else:
 # This project has no Apple Developer Team configured (see DEVELOPMENT_TEAM in project.yml), so
@@ -25,8 +25,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP_NAME="MacMemClean"
-SCHEME="MacMemClean"
+APP_NAME="MacMemMan"
+SCHEME="MacMemMan"
 DERIVED_DATA_DIR="$(pwd)/build"
 DIST_DIR="$(pwd)/dist"
 STAGING_DIR="$(pwd)/dmg-staging"

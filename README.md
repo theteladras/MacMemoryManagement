@@ -1,16 +1,16 @@
-# MacMemClean
+# MacMemMan
 
 A native macOS storage-cleanup app, built because the usual options are either a paid black box
 (CleanMyMac-style tools that delete first and explain never) or a manual slog through Finder with
-`du` in a terminal tab. MacMemClean sits in between: it finds caches, logs, developer junk,
+`du` in a terminal tab. MacMemMan sits in between: it finds caches, logs, developer junk,
 large/old files, duplicates, compressible files, apps with leftovers, and even space tied up in
 *other* user accounts on the same Mac — but it never deletes anything you haven't personally seen,
 itemized, and confirmed first.
 
-## Get MacMemClean
+## Get MacMemMan
 
-**Download** — grab the latest `MacMemClean.dmg` from this repository's
-[Releases](../../releases) page, open it, and drag `MacMemClean.app` into `Applications`. The
+**Download** — grab the latest `MacMemMan.dmg` from this repository's
+[Releases](../../releases) page, open it, and drag `MacMemMan.app` into `Applications`. The
 build isn't notarized (see [Distribution](#distribution-building-a-dmg) below), so the first
 launch needs one extra step: right-click the app in `Applications` → **Open** → confirm in the
 dialog (only needed once), or **System Settings → Privacy & Security → Open Anyway** if macOS
@@ -56,12 +56,12 @@ no release has been published yet.
   aggressiveness) that proposes a cleanup via an approval banner + system notification — it only
   ever *finds* things, exactly like a manual scan; nothing is deleted without you confirming in
   the Review screen.
-- **Menu bar** — MacMemClean lives in the menu bar so the background check keeps running with the
+- **Menu bar** — MacMemMan lives in the menu bar so the background check keeps running with the
   window closed; the dropdown shows a live capacity bar plus quick actions. The sidebar itself
   shows a live spinner next to any section with a scan or cleanup still running in the
   background, even after you've navigated away from it.
 - **Results survive quitting the app** — every section's last scan is cached to disk, so
-  relaunching MacMemClean shows real results immediately instead of a blank "tap Scan" screen; a
+  relaunching MacMemMan shows real results immediately instead of a blank "tap Scan" screen; a
   fresh scan then quietly runs in the background and updates the list in place.
 
 ## AI Assist (optional)
@@ -122,24 +122,24 @@ bare account home, never anything else.
 
 ```sh
 xcodegen generate
-open MacMemClean.xcodeproj   # then Cmd+R in Xcode
+open MacMemMan.xcodeproj   # then Cmd+R in Xcode
 ```
 
 or from the command line:
 
 ```sh
 xcodegen generate
-xcodebuild -scheme MacMemClean -configuration Debug build
-open ~/Library/Developer/Xcode/DerivedData/MacMemClean-*/Build/Products/Debug/MacMemClean.app
+xcodebuild -scheme MacMemMan -configuration Debug build
+open ~/Library/Developer/Xcode/DerivedData/MacMemMan-*/Build/Products/Debug/MacMemMan.app
 ```
 
 ## Full Disk Access
 
-MacMemClean is **not sandboxed** (distributed outside the App Store on purpose — see "Why not
+MacMemMan is **not sandboxed** (distributed outside the App Store on purpose — see "Why not
 sandboxed?" below), so it can reach system-wide caches, logs, and other apps' leftover files. To
 scan those locations, grant it Full Disk Access:
 
-**System Settings → Privacy & Security → Full Disk Access → enable MacMemClean**
+**System Settings → Privacy & Security → Full Disk Access → enable MacMemMan**
 
 The in-app **Permissions** screen shows current status and links straight there — it's also where
 you'd come back to grant this later if you skipped it initially. Without it, the app still works
@@ -161,7 +161,7 @@ Store convenience for that capability, same as DaisyDisk/CleanMyMac.
 ./scripts/build-dmg.sh
 ```
 
-This builds a Release configuration and packages it into `dist/MacMemClean.dmg` (the app plus an
+This builds a Release configuration and packages it into `dist/MacMemMan.dmg` (the app plus an
 `Applications` shortcut, the standard drag-to-install layout). See the comment block at the top of
 the script for the full explanation, but the short version:
 
@@ -177,14 +177,14 @@ Developer ID Application certificate, and to notarize the build with `notarytool
 separate step this script doesn't do automatically.
 
 **Publishing a DMG via GitHub Releases** — once `./scripts/build-dmg.sh` produces
-`dist/MacMemClean.dmg`, attach that file to a new [GitHub Release](../../releases/new) (tag it,
+`dist/MacMemMan.dmg`, attach that file to a new [GitHub Release](../../releases/new) (tag it,
 e.g., `v1.0`, add release notes, upload the `.dmg` as a release asset). That's what the
-[Get MacMemClean](#get-macmemclean) link above points to — no separate hosting needed.
+[Get MacMemMan](#get-macmemman) link above points to — no separate hosting needed.
 
 ## Project layout
 
 ```
-MacMemClean/
+MacMemMan/
   App/            App entry point, AppDelegate (keeps the app alive for the menu bar), AppState
   Models/         ScanItem, ScanCategory, SafetyLevel, ReviewManifest, DiskUsageSummary, AppInfo,
                   CompressionCandidate, FileTypeCategory, ...
