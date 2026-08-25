@@ -213,3 +213,9 @@ scripts/
   Models framework would be the natural fit, but it requires macOS 26+, well above this project's
   macOS 13 deployment target, so it'd need to be wired in as an optional, runtime-gated path
   rather than a replacement
+
+## License
+
+All rights reserved — see [LICENSE](LICENSE). This code is public for viewing only; no
+permission is granted to use, copy, modify, or distribute it without the copyright holder's
+written consent.
