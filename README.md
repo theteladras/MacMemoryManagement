@@ -7,6 +7,8 @@ large/old files, duplicates, compressible files, apps with leftovers, and even s
 *other* user accounts on the same Mac — but it never deletes anything you haven't personally seen,
 itemized, and confirmed first.
 
+![MacMemMan Overview screen — capacity bar, storage breakdown, and the "New in the Last 24h" activity card](docs/screenshots/overview.png)
+
 ## Get MacMemMan
 
 **Download** — grab the latest `MacMemMan.dmg` from this repository's
