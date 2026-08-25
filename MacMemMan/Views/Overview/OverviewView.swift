@@ -5,14 +5,10 @@ struct OverviewView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var viewModel = OverviewViewModel.shared
     @ObservedObject private var historyStore = StorageHistoryStore.shared
-    @ObservedObject private var deletionHistory = DeletionHistoryStore.shared
-    // Observed purely so `recentlyAddedItems` recomputes when any of these finish a background
-    // rescan — each already tracks its own scan results in memory, this just reads their most
-    // recent items for the "last 24 hours" card instead of doing any scanning of its own.
-    @ObservedObject private var junkVM = JunkScanViewModel.shared
-    @ObservedObject private var largeOldVM = LargeOldFilesViewModel.shared
-    @ObservedObject private var duplicatesVM = DuplicatesViewModel.shared
-    @State private var expandedActivityKind: ActivityKind?
+    @ObservedObject private var recentActivity = RecentActivityViewModel.shared
+    @State private var isFileListExpanded = false
+    @State private var newItemsSearchText = ""
+    @State private var newItemsSortOption: NewItemsSortOption = .dateDescending
 
     var body: some View {
         ScrollView {
@@ -254,108 +250,215 @@ struct OverviewView: View {
         return segments
     }
 
-    // MARK: - Activity in the last 24 hours
+    // MARK: - New in the last 24 hours
 
-    private enum ActivityKind: Equatable { case added, removed }
-    private static let recentActivityWindow: TimeInterval = 24 * 60 * 60
-
-    /// Reuses whatever's already sitting in memory from sections you've scanned before (Caches &
-    /// Junk, Large & Old Files, Duplicates) — never walks the disk on its own to watch for new
-    /// files, so this costs nothing extra to compute but can under-count if you haven't opened a
-    /// given section recently. Deduplicated by id since the same file can legitimately show up in
-    /// more than one of those scans.
-    private var recentlyAddedItems: [ScanItem] {
-        let cutoff = Date().addingTimeInterval(-Self.recentActivityWindow)
-        var seen = Set<String>()
-        var result: [ScanItem] = []
-        for item in junkVM.items + largeOldVM.allItems + duplicatesVM.groups.flatMap(\.items) {
-            guard let modifiedAt = item.modifiedAt, modifiedAt >= cutoff else { continue }
-            if seen.insert(item.id).inserted { result.append(item) }
-        }
-        return result.sorted { ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast) }
-    }
-
-    /// Actual deletions recorded through the app in the last 24 hours — a real, complete count
-    /// (unlike "New" above, nothing here is approximate).
-    private var recentlyRemovedEntries: [DeletionLogEntry] {
-        let cutoff = Date().addingTimeInterval(-Self.recentActivityWindow)
-        return deletionHistory.entries.filter { $0.date >= cutoff && $0.outcome == .deleted }
+    private var totalNewBytes: Int64 {
+        recentActivity.items.reduce(0) { $0 + $1.sizeBytes }
     }
 
     private var activityCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
-                IconChip(symbolName: "arrow.left.arrow.right.circle.fill", tint: .teal, size: 24)
-                Text("Last 24 Hours")
+                IconChip(symbolName: "sparkles", tint: .green, size: 24)
+                Text("New in the Last \(recentActivity.windowHours)h")
                     .font(.system(.headline, design: .rounded))
-                InfoButton(text: "Files with a modification date in the last 24 hours, from sections you've scanned before (Caches & Junk, Large & Old Files, Duplicates), plus everything actually deleted through the app in that same window. This isn't a full-disk watch — \"New\" can under-count if you haven't opened a given section recently; \"Removed\" is always a complete count. Tap either to see which files.")
+                InfoButton(text: "A deep scan of Documents, Desktop, Downloads, Pictures, Movies, Music & Public for files modified in the chosen window. It runs once automatically the first time you use this feature; after that it's real work on a large folder, so it only re-runs when you tap Check Now, never automatically — results are cached between visits so you always see your last check instantly. This is a personal-content check, not a full-disk audit — it doesn't look at ~/Library (caches, app data), Applications, or system locations. For a true \"what's using my space\" picture across the whole disk, use Storage Explorer or Large & Old Files instead.")
                 Spacer()
+                windowToggle
+                reloadButton
             }
 
-            HStack(spacing: 16) {
-                activityStat(kind: .added, symbol: "arrow.down.circle.fill", tint: .green, label: "New", count: recentlyAddedItems.count, bytes: recentlyAddedItems.reduce(0) { $0 + $1.sizeBytes })
-                Divider().frame(height: 40)
-                activityStat(kind: .removed, symbol: "arrow.up.circle.fill", tint: .orange, label: "Removed", count: recentlyRemovedEntries.count, bytes: recentlyRemovedEntries.reduce(Int64(0)) { $0 + $1.sizeBytes })
-            }
+            recentScanStatusLabel
+            newItemsAccentBlock
 
-            if let expandedActivityKind {
+            if isFileListExpanded {
                 Divider()
-                activityFileList(for: expandedActivityKind)
+                activityFileList
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .cardStyle()
-        .animation(.easeInOut(duration: 0.2), value: expandedActivityKind)
+        .animation(.easeInOut(duration: 0.2), value: isFileListExpanded)
+        .animation(.easeInOut(duration: 0.2), value: recentActivity.isScanning)
     }
 
-    private func activityStat(kind: ActivityKind, symbol: String, tint: Color, label: String, count: Int, bytes: Int64) -> some View {
+    /// A segmented 24h/48h switch — deliberately doesn't trigger a rescan by itself (consistent
+    /// with "never automatic" elsewhere on this card); it just changes what the next Check Now
+    /// uses. `recentScanStatusLabel` below covers the case where that leaves currently-displayed
+    /// results out of sync with the newly selected window.
+    private var windowToggle: some View {
+        Picker("Window", selection: $recentActivity.windowHours) {
+            Text("24h").tag(24)
+            Text("48h").tag(48)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(width: 100)
+        .disabled(recentActivity.isScanning)
+    }
+
+    private var reloadButton: some View {
         Button {
-            expandedActivityKind = (expandedActivityKind == kind) ? nil : kind
+            Task { await recentActivity.scan() }
         } label: {
-            HStack(spacing: 10) {
-                IconChip(symbolName: symbol, tint: tint, size: 34)
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 4) {
-                        Text("\(count) \(label)")
-                            .font(.system(.title3, design: .rounded).weight(.bold))
-                        if count > 0 {
-                            Image(systemName: expandedActivityKind == kind ? "chevron.up" : "chevron.down")
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(.secondary)
-                        }
+            if recentActivity.isScanning {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: "arrow.clockwise")
+            }
+        }
+        .buttonStyle(.borderless)
+        .disabled(recentActivity.isScanning)
+        .help("Check Now — deep-scans your personal folders for files changed in the selected window")
+    }
+
+    /// Makes clear this is a manually-triggered snapshot, not a live watch — otherwise a count
+    /// that never updates on its own reads as broken rather than "hasn't been checked yet". Also
+    /// flags when the 24h/48h toggle has moved since the last actual scan, so results on screen
+    /// aren't mistaken for reflecting a window they were never checked against.
+    @ViewBuilder
+    private var recentScanStatusLabel: some View {
+        if recentActivity.isScanning {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Scanning your personal folders…").font(.caption).foregroundStyle(.secondary)
+            }
+        } else if let lastScanDate = recentActivity.lastScanDate {
+            HStack(spacing: 4) {
+                Text("Last checked " + RelativeDateTimeFormatter().localizedString(for: lastScanDate, relativeTo: Date()))
+                if let lastScanWindowHours = recentActivity.lastScanWindowHours {
+                    Text("(\(lastScanWindowHours)h window)")
+                    if lastScanWindowHours != recentActivity.windowHours {
+                        Text("— tap \(Image(systemName: "arrow.clockwise")) to refresh for \(recentActivity.windowHours)h")
+                            .foregroundStyle(.orange)
                     }
-                    Text(bytes > 0 ? bytes.formattedBytes : "—")
-                        .font(.caption)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        } else {
+            Text("Starting your first check…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// The one and only stat on this card, given real visual weight (accent-tinted block, not just
+    /// another row of text) since it's no longer sharing space with a second "Removed" stat — tap
+    /// it to see exactly which files, same as before.
+    private var newItemsAccentBlock: some View {
+        Button {
+            isFileListExpanded.toggle()
+        } label: {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.green.opacity(0.16))
+                        .frame(width: 52, height: 52)
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.green)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(recentActivity.items.isEmpty ? "No new items" : "\(recentActivity.items.count) new item\(recentActivity.items.count == 1 ? "" : "s")")
+                        .font(.system(.title2, design: .rounded).weight(.bold))
+                    Text(totalNewBytes > 0 ? totalNewBytes.formattedBytes : "Nothing modified in the last \(recentActivity.lastScanWindowHours ?? recentActivity.windowHours)h")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                if !recentActivity.items.isEmpty {
+                    Image(systemName: isFileListExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.bold))
                         .foregroundStyle(.secondary)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(Color.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(count == 0)
+        .disabled(recentActivity.items.isEmpty)
     }
 
-    /// Kept collapsed by default so this card stays small — only appears once you tap a stat above,
-    /// and is capped in height so a busy day scrolls in place rather than pushing the rest of the
-    /// page down.
-    @ViewBuilder
-    private func activityFileList(for kind: ActivityKind) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 6) {
-                switch kind {
-                case .added:
-                    ForEach(recentlyAddedItems) { item in
-                        activityFileRow(name: item.displayName, detail: item.category.rawValue, bytes: item.sizeBytes)
-                    }
-                case .removed:
-                    ForEach(recentlyRemovedEntries) { entry in
-                        activityFileRow(name: entry.displayName, detail: entry.category.rawValue, bytes: entry.sizeBytes)
-                    }
-                }
+    private enum NewItemsSortOption: String, CaseIterable, Identifiable {
+        case dateDescending = "Newest First"
+        case dateAscending = "Oldest First"
+        case sizeDescending = "Largest First"
+        case sizeAscending = "Smallest First"
+        var id: String { rawValue }
+    }
+
+    /// A day with hundreds of new files (this deep scan isn't shy about touching real project
+    /// folders) is exactly when "just scroll and look" stops working — search narrows it down by
+    /// name or folder, sort gets the biggest or most recent to the top.
+    private var filteredSortedNewItems: [RecentFile] {
+        var items = recentActivity.items
+        let query = newItemsSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty {
+            items = items.filter {
+                $0.displayName.localizedCaseInsensitiveContains(query) || $0.folder.localizedCaseInsensitiveContains(query)
             }
         }
-        .frame(maxHeight: 160)
+        switch newItemsSortOption {
+        case .dateDescending: items.sort { $0.modifiedAt > $1.modifiedAt }
+        case .dateAscending: items.sort { $0.modifiedAt < $1.modifiedAt }
+        case .sizeDescending: items.sort { $0.sizeBytes > $1.sizeBytes }
+        case .sizeAscending: items.sort { $0.sizeBytes < $1.sizeBytes }
+        }
+        return items
+    }
+
+    /// Kept collapsed by default so this card stays small — only appears once tapped, and is capped
+    /// in height so a busy day scrolls in place rather than pushing the rest of the page down.
+    private var activityFileList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("Search by name or folder", text: $newItemsSearchText)
+                    .textFieldStyle(.plain)
+                    .font(.callout)
+                if !newItemsSearchText.isEmpty {
+                    Button {
+                        newItemsSearchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer(minLength: 8)
+                Picker("Sort", selection: $newItemsSortOption) {
+                    ForEach(NewItemsSortOption.allCases) { option in
+                        Text(option.rawValue).tag(option)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 140)
+            }
+            .padding(8)
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            if filteredSortedNewItems.isEmpty {
+                Text("No files match “\(newItemsSearchText)”.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 4)
+            } else {
+                ScrollView {
+                    // `LazyVStack`, not `VStack` — this list can easily run into the hundreds of
+                    // rows on a busy day, and a plain `VStack` would lay out every row up front
+                    // regardless of the fixed, much shorter visible height below.
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(filteredSortedNewItems) { item in
+                            activityFileRow(name: item.displayName, detail: item.folder, bytes: item.sizeBytes)
+                        }
+                    }
+                }
+                .frame(maxHeight: 220)
+            }
+        }
     }
 
     private func activityFileRow(name: String, detail: String, bytes: Int64) -> some View {

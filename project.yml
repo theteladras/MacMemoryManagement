@@ -35,6 +35,7 @@ targets:
         NSMainStoryboardFile: ""
         NSPrincipalClass: NSApplication
         LSUIElement: false
+        NSPhotoLibraryUsageDescription: "MacMemMan checks whether it can see your Photos Library when a scan (Duplicates, By File Type, Last 24 Hours) walks into it — nothing is read unless you grant this."
     entitlements:
       path: MacMemMan/Resources/MacMemMan.entitlements
       properties:

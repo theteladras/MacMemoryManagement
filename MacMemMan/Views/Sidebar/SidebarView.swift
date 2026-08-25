@@ -45,6 +45,11 @@ struct SidebarView: View {
     @ObservedObject private var compressionVM = CompressionViewModel.shared
     @ObservedObject private var uninstallerVM = UninstallerViewModel.shared
     @ObservedObject private var multiUserVM = MultiUserViewModel.shared
+    // Not `appState.permissions` — see `PermissionsManager`'s doc comment: a nested object's own
+    // `@Published` changes don't propagate through `AppState`'s `@EnvironmentObject` subscription,
+    // so this nudge would never reactively appear/disappear as FDA is granted or revoked without
+    // its own direct subscription.
+    @ObservedObject private var permissions = PermissionsManager.shared
 
     private let mainSections: [SidebarSection] = [.overview, .explorer, .junk, .largeOld, .duplicates, .compression, .uninstaller, .multiUser, .history]
     private let footerSections: [SidebarSection] = [.permissions, .settings]
@@ -92,7 +97,7 @@ struct SidebarView: View {
         .background(.regularMaterial)
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: isExpanded)
         .safeAreaInset(edge: .bottom) {
-            if !appState.permissions.hasFullDiskAccess {
+            if !permissions.hasFullDiskAccess {
                 fdaNudge
                     .padding(.horizontal, isExpanded ? 10 : 8)
                     .padding(.bottom, 8)
@@ -133,7 +138,7 @@ struct SidebarView: View {
 
     private func sidebarRow(_ section: SidebarSection) -> some View {
         let isSelected = appState.selectedSection == section
-        let needsAttention = section == .permissions && !appState.permissions.hasFullDiskAccess
+        let needsAttention = section == .permissions && !permissions.hasFullDiskAccess
         let busy = isBusy(section)
 
         return Button {

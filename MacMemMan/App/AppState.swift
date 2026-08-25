@@ -44,7 +44,13 @@ final class AppState: ObservableObject {
     /// Overview rather than immediately interrupting the user with a sheet.
     @Published var pendingAutoCleanupManifest: ReviewManifest?
 
-    let permissions = PermissionsManager()
+    let permissions = PermissionsManager.shared
+
+    /// Bridges to `@Environment(\.openWindow)`, which is only resolvable from inside a real
+    /// SwiftUI `Scene` — set once by `RootView` (which lives in the `WindowGroup` scene) so the
+    /// menu bar controller, which hosts its content outside any `Scene` on purpose (see
+    /// `MenuBarController`), still has a working way to reopen the main window.
+    var openMainWindow: (() -> Void)?
 
     func requestReview(_ manifest: ReviewManifest) {
         guard !manifest.items.isEmpty else { return }

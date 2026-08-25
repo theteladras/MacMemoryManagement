@@ -5,6 +5,7 @@ struct RootView: View {
     @ObservedObject private var overviewVM = OverviewViewModel.shared
     @AppStorage("sidebar.isExpanded") private var isSidebarExpanded: Bool = true
     @State private var titleBarHeight: CGFloat = 38
+    @Environment(\.openWindow) private var openWindow
 
     private let expandedWidth: CGFloat = 240
     private let collapsedWidth: CGFloat = 68
@@ -63,6 +64,12 @@ struct RootView: View {
         )
         .sheet(item: $appState.pendingManifest) { manifest in
             ReviewSheet(manifest: manifest)
+        }
+        .onAppear {
+            // See `AppState.openMainWindow` — the menu bar controller lives outside any SwiftUI
+            // `Scene`, so it can't resolve `@Environment(\.openWindow)` itself; this is the one
+            // place in the app where that environment value is actually valid.
+            appState.openMainWindow = { openWindow(id: "main") }
         }
     }
 

@@ -3,6 +3,9 @@ import SwiftUI
 struct JunkScanView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var viewModel = JunkScanViewModel.shared
+    // Not `appState.permissions` — see `PermissionsManager`'s doc comment: a nested object's own
+    // `@Published` changes don't propagate through `AppState`'s `@EnvironmentObject` subscription.
+    @ObservedObject private var permissions = PermissionsManager.shared
     @State private var aiSummary: String?
     @State private var isSummarizing = false
     @State private var isSuggesting = false
@@ -147,7 +150,7 @@ struct JunkScanView: View {
                             symbolName: group.category.symbolName,
                             tint: group.category.tint,
                             items: group.items,
-                            note: (group.category.requiresFullDiskAccess && !appState.permissions.hasFullDiskAccess) ? "Needs Full Disk Access" : nil
+                            note: (group.category.requiresFullDiskAccess && !permissions.hasFullDiskAccess) ? "Needs Full Disk Access" : nil
                         )
                     }
                 }

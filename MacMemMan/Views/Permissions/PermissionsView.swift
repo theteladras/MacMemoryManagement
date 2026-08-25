@@ -1,3 +1,4 @@
+import Photos
 import SwiftUI
 import UserNotifications
 
@@ -5,7 +6,11 @@ import UserNotifications
 /// declined during first launch, there's an obvious place to come back and grant it later rather
 /// than it being buried inside Settings.
 struct PermissionsView: View {
-    @EnvironmentObject private var appState: AppState
+    // Held directly, not read through `appState.permissions` — a nested object's own `@Published`
+    // changes don't propagate through a parent's `@EnvironmentObject` subscription, so every row
+    // below needs its own live subscription to actually update when a permission changes. See
+    // `PermissionsManager`'s doc comment for how this was proven (not guessed) via debug logging.
+    @ObservedObject private var permissions = PermissionsManager.shared
     @State private var launchAtLogin = LaunchAtLoginService.isEnabled
 
     var body: some View {
@@ -13,7 +18,9 @@ struct PermissionsView: View {
             VStack(alignment: .leading, spacing: 20) {
                 fullDiskAccessRow
                 notificationsRow
+                photosRow
                 launchAtLoginRow
+                folderAndMediaAccessCard
                 adminAuthorizationCard
                 explainerCard
             }
@@ -22,10 +29,10 @@ struct PermissionsView: View {
             .frame(maxWidth: .infinity)
         }
         .navigationTitle("Permissions")
-        .onAppear { appState.permissions.refresh() }
+        .onAppear { permissions.refresh() }
     }
 
-    private var granted: Bool { appState.permissions.hasFullDiskAccess }
+    private var granted: Bool { permissions.hasFullDiskAccess }
 
     private var fullDiskAccessRow: some View {
         PermissionRow(
@@ -38,12 +45,12 @@ struct PermissionsView: View {
                 ? "MacMemMan can scan system caches, logs, and other apps' leftover files."
                 : "Without this, MacMemMan can still clean your own files (Downloads, Documents, per-app caches) — but system-wide caches, logs, and other apps' leftovers will be skipped.",
             footnote: "macOS only lets System Settings grant or revoke this — tapping opens the right pane directly.",
-            action: { appState.permissions.openFullDiskAccessSettings() }
+            action: { permissions.openFullDiskAccessSettings() }
         )
     }
 
     private var notificationsRow: some View {
-        let status = appState.permissions.notificationStatus
+        let status = permissions.notificationStatus
         let isOn = status == .authorized || status == .provisional
         return PermissionRow(
             symbolName: "bell.badge.fill",
@@ -57,12 +64,50 @@ struct PermissionsView: View {
                 : "Already decided once — tapping opens System Settings to change it.",
             action: {
                 if status == .notDetermined {
-                    appState.permissions.requestNotifications()
+                    permissions.requestNotifications()
                 } else {
-                    appState.permissions.openNotificationSettings()
+                    permissions.openNotificationSettings()
                 }
             }
         )
+    }
+
+    /// Real, live status (unlike the folder/media card below) — `Photos.framework`'s
+    /// authorization API works the same way in a native Mac app as Full Disk Access/Notifications,
+    /// so this gets the same honest toggle-styled treatment rather than being lumped in as
+    /// "can't check this one" information.
+    private var photosRow: some View {
+        let status = permissions.photosStatus
+        let isOn = status == .authorized || status == .limited
+        return PermissionRow(
+            symbolName: "photo.on.rectangle.angled",
+            tint: .purple,
+            title: "Photos Library",
+            isOn: isOn,
+            statusText: photosStatusLabel(status),
+            description: "Needed when a scan (Duplicates, By File Type, Last 24 Hours) walks into your Photos Library — without it, that content is skipped rather than reported inaccurately.",
+            footnote: status == .notDetermined
+                ? "Tapping asks right now — no need to leave the app."
+                : "Already decided once — tapping opens System Settings to change it.",
+            action: {
+                AppDebugLog.write("photosRow tapped: status=\(status.rawValue)")
+                if status == .notDetermined {
+                    permissions.requestPhotos()
+                } else {
+                    permissions.openPhotosSettings()
+                }
+            }
+        )
+    }
+
+    private func photosStatusLabel(_ status: PHAuthorizationStatus) -> String {
+        switch status {
+        case .authorized: return "Granted"
+        case .limited: return "Limited"
+        case .denied, .restricted: return "Denied"
+        case .notDetermined: return "Not asked yet"
+        @unknown default: return "Unknown"
+        }
     }
 
     /// Unlike Full Disk Access/Notifications, this one is a genuine, immediate in-app toggle —
@@ -97,6 +142,35 @@ struct PermissionsView: View {
         .buttonStyle(.plain)
         .cardStyle()
         .animation(.easeInOut(duration: 0.25), value: launchAtLogin)
+    }
+
+    /// Not a toggle-styled row like the others above — macOS has no API to check or pre-grant
+    /// these, only per-folder prompts that fire the first time a scan actually touches Desktop,
+    /// Documents, Downloads, Pictures, or the Music folder (you've likely seen a few of these
+    /// already, one per folder, the first time "Last 24 Hours" or "By File Type" ran). This card
+    /// exists so those aren't a mystery, and so there's still a way back to review or revoke them.
+    private var folderAndMediaAccessCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 14) {
+                IconChip(symbolName: "folder.badge.questionmark", tint: .orange, size: 40)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Folder & Media Access").font(.system(.title3, design: .rounded).weight(.bold))
+                    Text("Requested per folder, as needed")
+                        .font(.system(.callout, design: .rounded).weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text("Scans that look at your personal content (Desktop, Documents, Downloads, Pictures, Music) trigger a separate macOS prompt the first time each one is actually touched — there's no API for an app to check or pre-grant these ahead of time, so they can't be listed here as granted or not the way Full Disk Access or Photos can.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            HStack(spacing: 10) {
+                Button("Review Files & Folders…") { permissions.openFilesAndFoldersSettings() }
+                Button("Review Media & Apple Music…") { permissions.openMediaLibrarySettings() }
+                Spacer()
+            }
+        }
+        .cardStyle()
     }
 
     /// Not a toggle — there's nothing to grant or revoke ahead of time. Multi-user cleanup

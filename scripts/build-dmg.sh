@@ -6,7 +6,8 @@
 #   ./scripts/build-dmg.sh
 #
 # Output:
-#   ./dist/MacMemMan.dmg
+#   ./dist/MacMemMan-YYYY-MM-DD.dmg  (date-stamped so successive builds don't silently overwrite
+#                                      each other and it's obvious how fresh a given .dmg is)
 #
 # Important — read before sending this to someone else:
 # This project has no Apple Developer Team configured (see DEVELOPMENT_TEAM in project.yml), so
@@ -27,10 +28,11 @@ cd "$(dirname "$0")/.."
 
 APP_NAME="MacMemMan"
 SCHEME="MacMemMan"
+BUILD_DATE="$(date +%Y-%m-%d)"
 DERIVED_DATA_DIR="$(pwd)/build"
 DIST_DIR="$(pwd)/dist"
 STAGING_DIR="$(pwd)/dmg-staging"
-DMG_PATH="$DIST_DIR/${APP_NAME}.dmg"
+DMG_PATH="$DIST_DIR/${APP_NAME}-${BUILD_DATE}.dmg"
 
 echo "==> Regenerating Xcode project from project.yml"
 xcodegen generate
@@ -62,7 +64,7 @@ echo "==> Creating $DMG_PATH"
 mkdir -p "$DIST_DIR"
 rm -f "$DMG_PATH"
 hdiutil create \
-  -volname "$APP_NAME" \
+  -volname "${APP_NAME} ${BUILD_DATE}" \
   -srcfolder "$STAGING_DIR" \
   -fs HFS+ \
   -format UDZO \

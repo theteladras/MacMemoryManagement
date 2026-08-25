@@ -1,16 +1,18 @@
 import SwiftUI
 
-/// Content of the menu bar dropdown. Uses `.menuBarExtraStyle(.window)` (a floating custom panel)
-/// rather than `.menu` (a native NSMenu) specifically so it can show a real capacity bar at the
-/// top — a native menu can only hold text/icon rows, not an arbitrary view. Rows below are
-/// hand-styled to still feel like a menu.
+/// Content of the menu bar dropdown, hosted in an `NSPopover` by `MenuBarController` (a plain
+/// `NSMenu` can only hold text/icon rows, not an arbitrary view like the capacity bar at the
+/// top) — rows below are hand-styled to still feel like a menu.
 struct MenuBarContentView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var overview = OverviewViewModel.shared
     @ObservedObject private var autoCleanup = AutoCleanupSettings.shared
-    @Environment(\.openWindow) private var openWindow
     @State private var launchAtLogin = LaunchAtLoginService.isEnabled
     @State private var isCheckingNow = false
+
+    /// Closes the popover — set by `MenuBarController`. Defaults to a no-op so SwiftUI previews
+    /// and any other host still work without wiring one up.
+    var dismiss: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -20,15 +22,17 @@ struct MenuBarContentView: View {
 
             row(title: "Open MacMemMan", symbol: "macwindow") {
                 NSApp.activate(ignoringOtherApps: true)
-                openWindow(id: "main")
+                appState.openMainWindow?()
+                dismiss()
             }
 
             if let manifest = appState.pendingAutoCleanupManifest {
                 row(title: "Review Found Items (\(manifest.count), \(manifest.totalBytes.formattedBytes))", symbol: "sparkles", tint: .teal) {
                     NSApp.activate(ignoringOtherApps: true)
-                    openWindow(id: "main")
+                    appState.openMainWindow?()
                     appState.requestReview(manifest)
                     appState.pendingAutoCleanupManifest = nil
+                    dismiss()
                 }
             }
 
