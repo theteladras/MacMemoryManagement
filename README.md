@@ -1,4 +1,4 @@
-# MacMemMan
+# MacMemMan (MMM)
 
 A native macOS storage-cleanup app, built because the usual options are either a paid black box
 (CleanMyMac-style tools that delete first and explain never) or a manual slog through Finder with
