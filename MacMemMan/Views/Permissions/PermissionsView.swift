@@ -39,36 +39,25 @@ struct PermissionsView: View {
         }
     }
 
-    private var granted: Bool { permissions.hasFullDiskAccess }
-
     private var fullDiskAccessRow: some View {
-        PermissionRow(
+        PermissionInfoRow(
             symbolName: "internaldrive.fill",
             tint: .indigo,
             title: "Full Disk Access",
-            isOn: granted,
-            statusText: granted ? "Granted" : "Not granted",
-            description: granted
-                ? "MacMemMan can scan system caches, logs, and other apps' leftover files."
-                : "Without this, MacMemMan can still clean your own files (Downloads, Documents, per-app caches) — but system-wide caches, logs, and other apps' leftovers will be skipped.",
-            footnote: "macOS only lets System Settings grant or revoke this — tapping opens the right pane directly.",
+            description: "Lets MacMemMan scan system caches, logs, and other apps' leftover files. Without it, MacMemMan still cleans your own files (Downloads, Documents, per-app caches) — system-wide locations are just skipped. macOS doesn't let an app grant or check this itself, and an ad-hoc-signed build like this one can lose the grant on every rebuild — System Settings is the source of truth for whether it's actually on.",
+            buttonLabel: "Open Full Disk Access Settings…",
             action: { permissions.openFullDiskAccessSettings() }
         )
     }
 
     private var notificationsRow: some View {
         let status = permissions.notificationStatus
-        let isOn = status == .authorized || status == .provisional
-        return PermissionRow(
+        return PermissionInfoRow(
             symbolName: "bell.badge.fill",
             tint: .pink,
             title: "Notifications",
-            isOn: isOn,
-            statusText: notificationStatusLabel(status),
-            description: "Lets Automatic Cleanup (Settings) let you know when it finds something to review, even if MacMemMan's window is closed.",
-            footnote: status == .notDetermined
-                ? "Tapping asks right now — no need to leave the app."
-                : "Already decided once — tapping opens System Settings to change it.",
+            description: "Lets Automatic Cleanup (Settings) let you know when it finds something to review, even if MacMemMan's window is closed. Once macOS has asked once, only System Settings can change the answer.",
+            buttonLabel: status == .notDetermined ? "Allow Notifications…" : "Open Notification Settings…",
             action: {
                 if status == .notDetermined {
                     permissions.requestNotifications()
@@ -79,23 +68,14 @@ struct PermissionsView: View {
         )
     }
 
-    /// Real, live status (unlike the folder/media card below) — `Photos.framework`'s
-    /// authorization API works the same way in a native Mac app as Full Disk Access/Notifications,
-    /// so this gets the same honest toggle-styled treatment rather than being lumped in as
-    /// "can't check this one" information.
     private var photosRow: some View {
         let status = permissions.photosStatus
-        let isOn = status == .authorized || status == .limited
-        return PermissionRow(
+        return PermissionInfoRow(
             symbolName: "photo.on.rectangle.angled",
             tint: .purple,
             title: "Photos Library",
-            isOn: isOn,
-            statusText: photosStatusLabel(status),
-            description: "Needed when a scan (Duplicates, By File Type, Last 24 Hours) walks into your Photos Library — without it, that content is skipped rather than reported inaccurately.",
-            footnote: status == .notDetermined
-                ? "Tapping asks right now — no need to leave the app."
-                : "Already decided once — tapping opens System Settings to change it.",
+            description: "Needed when a scan (Duplicates, By File Type, Last 24 Hours) walks into your Photos Library — without it, that content is skipped rather than reported inaccurately. Once macOS has asked once, only System Settings can change the answer.",
+            buttonLabel: status == .notDetermined ? "Allow Photos Access…" : "Open Photos Settings…",
             action: {
                 AppDebugLog.write("photosRow tapped: status=\(status.rawValue)")
                 if status == .notDetermined {
@@ -105,16 +85,6 @@ struct PermissionsView: View {
                 }
             }
         )
-    }
-
-    private func photosStatusLabel(_ status: PHAuthorizationStatus) -> String {
-        switch status {
-        case .authorized: return "Granted"
-        case .limited: return "Limited"
-        case .denied, .restricted: return "Denied"
-        case .notDetermined: return "Not asked yet"
-        @unknown default: return "Unknown"
-        }
     }
 
     /// Unlike Full Disk Access/Notifications, this one is a genuine, immediate in-app toggle —
@@ -200,16 +170,6 @@ struct PermissionsView: View {
         .cardStyle()
     }
 
-    private func notificationStatusLabel(_ status: UNAuthorizationStatus) -> String {
-        switch status {
-        case .authorized, .provisional: return "Granted"
-        case .denied: return "Denied"
-        case .notDetermined: return "Not asked yet"
-        case .ephemeral: return "Granted (temporary)"
-        @unknown default: return "Unknown"
-        }
-    }
-
     private var explainerCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Why MacMemMan asks for this")
@@ -233,48 +193,40 @@ struct PermissionsView: View {
     }
 }
 
-/// A toggle-*styled* permission row — not a real interactive `Toggle`, deliberately. macOS never
-/// lets an app flip its own TCC permission (Full Disk Access, Notifications-once-decided) from
-/// in-process; a `Toggle` bound to that external truth would just snap back to its real state the
-/// instant you tapped it. This looks like a switch and always does the right thing when tapped —
-/// request the permission directly if nothing's been decided yet, otherwise open the exact System
-/// Settings pane — without ever pretending to control something it can't.
-private struct PermissionRow: View {
+/// Deliberately *not* a live on/off indicator. It used to be — but macOS never lets an app flip
+/// or reliably read back its own TCC permission (Full Disk Access, Notifications/Photos once
+/// decided) from in-process, and for an ad-hoc-signed build that state can silently reset on every
+/// rebuild (each build gets a new code signature, so TCC treats it as a different app). Showing a
+/// green/red status here was actively misleading: granted-but-shown-as-off, with no way for the
+/// user to tell whether the app was wrong or the permission really was off. System Settings is the
+/// one place that's always right, so every row just explains what the permission is for and hands
+/// you straight there (or triggers the real system prompt directly, if nothing's been decided yet).
+private struct PermissionInfoRow: View {
     let symbolName: String
     let tint: Color
     let title: String
-    let isOn: Bool
-    let statusText: String
     let description: String
-    let footnote: String
+    let buttonLabel: String
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 14) {
-                IconChip(symbolName: symbolName, tint: isOn ? .green : tint, size: 40)
+                IconChip(symbolName: symbolName, tint: tint, size: 40)
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text(title).font(.system(.title3, design: .rounded).weight(.bold))
-                        Spacer()
-                        SwitchIndicator(isOn: isOn)
-                    }
-                    Text(statusText)
-                        .font(.system(.callout, design: .rounded).weight(.semibold))
-                        .foregroundStyle(isOn ? .green : .orange)
+                    Text(title).font(.system(.title3, design: .rounded).weight(.bold))
                     Text(description)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(footnote)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
                 }
             }
+            HStack {
+                Button(buttonLabel, action: action)
+                Spacer()
+            }
         }
-        .buttonStyle(.plain)
         .cardStyle()
-        .animation(.easeInOut(duration: 0.25), value: isOn)
     }
 }
 
