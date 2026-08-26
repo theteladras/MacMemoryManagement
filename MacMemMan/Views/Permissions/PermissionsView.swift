@@ -30,6 +30,13 @@ struct PermissionsView: View {
         }
         .navigationTitle("Permissions")
         .onAppear { permissions.refresh() }
+        // `.onAppear` only fires once, when this view is first inserted — it does not refire when
+        // you alt-tab back from System Settings after granting a permission there, so without this
+        // the screen would keep showing stale "Not granted" state until the view was torn down and
+        // recreated (e.g. switching sidebar sections and back).
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            permissions.refresh()
+        }
     }
 
     private var granted: Bool { permissions.hasFullDiskAccess }
